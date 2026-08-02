@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { addJoinedEventToUser, addOrganizedEventToUser, getCurrentUser, logoutUser, removeOrganizedEventFromUser, User } from "@/lib/auth";
+import { addJoinedEventToUser, addOrganizedEventToUser, getCurrentUser, logoutUser, removeOrganizedEventFromUser, requestAppReset, User } from "@/lib/auth";
 import type { EventData } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -37,6 +37,13 @@ export default function DashboardPage() {
 
   const handleLogout = () => {
     logoutUser();
+    router.push("/");
+  };
+
+  const handleClearAllData = () => {
+    if (!confirm("This will clear your saved login, cached events, and local app data on this device. Continue?")) return;
+    requestAppReset();
+    setUser(null);
     router.push("/");
   };
 
@@ -173,6 +180,9 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <button onClick={handleClearAllData} className="secondary text-sm">
+              Clear All Data
+            </button>
             <button onClick={handleLogout} className="secondary text-sm">
               Sign Out
             </button>
@@ -209,6 +219,18 @@ export default function DashboardPage() {
                 Join Event with 4-Digit Code
               </button>
             </div>
+          </div>
+        </section>
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Settings</h2>
+              <p className="mt-1 text-sm text-slate-500">Reset the app on this device to remove saved sign-ins and cached event data.</p>
+            </div>
+            <button onClick={handleClearAllData} className="danger px-4 py-2 text-sm font-semibold">
+              Clear All Local App Data
+            </button>
           </div>
         </section>
 

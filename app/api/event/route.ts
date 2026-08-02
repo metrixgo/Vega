@@ -30,10 +30,11 @@ function getStoragePath(): string {
   }
 }
 
-function loadDiskEvents() {
-  if (globalEvents._vegaDiskLoaded) return;
+function loadDiskEvents(force = false) {
+  if (!force && globalEvents._vegaDiskLoaded) return;
   try {
     const filePath = getStoragePath();
+    events.clear();
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, "utf-8");
       const parsed: Record<string, EventData> = JSON.parse(raw);
@@ -51,11 +52,13 @@ function loadDiskEvents() {
 function saveDiskEvents() {
   try {
     const filePath = getStoragePath();
+    const tempFile = `${filePath}.tmp`;
     const obj: Record<string, EventData> = {};
     for (const [code, data] of events.entries()) {
       obj[code] = data;
     }
-    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), "utf-8");
+    fs.writeFileSync(tempFile, JSON.stringify(obj, null, 2), "utf-8");
+    fs.renameSync(tempFile, filePath);
   } catch (err) {
     console.error("Failed to save disk events:", err);
   }
@@ -123,9 +126,9 @@ function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMe
 }
 
 export async function GET(request: NextRequest) {
-  loadDiskEvents();
+  loadDiskEvents(true);
   const { searchParams } = new URL(request.url);
-  const code = (searchParams.get("code") || "8492").toUpperCase();
+  const code = (searchParams.get("code") || "8492").toString().trim().toUpperCase();
 
   const event = events.get(code);
 
@@ -141,7 +144,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  loadDiskEvents();
+  loadDiskEvents(true);
   try {
     const body = await request.json();
     const {
@@ -167,7 +170,7 @@ export async function POST(request: NextRequest) {
       eventData,
     } = body;
 
-    const code = (rawCode || "8492").toUpperCase();
+    const code = (rawCode || "8492").toString().trim().toUpperCase();
     let event: EventData | null | undefined = events.get(code);
 
     // Action: RESTORE
