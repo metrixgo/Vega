@@ -138,7 +138,7 @@ export default function OrganizerEventPage() {
   );
 
   const count = (status: Status) => students.filter((student) => student.status === status).length;
-  const checkedInCount = useMemo(() => students.filter((s) => s.status === "Safe" || s.checkedInAt).length, [students]);
+  const checkedInCount = useMemo(() => students.filter((s) => s.checkedInAt && s.status === "Safe").length, [students]);
 
   const handleSendNotice = async () => {
     if (!noticeText.trim()) return;

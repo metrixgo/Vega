@@ -306,6 +306,14 @@ export async function POST(request: NextRequest) {
         });
       }
     } else if (action === "trigger_check_in") {
+      // Reset all participants' check-in status so count starts at 0 checked-in for new request!
+      event.students = event.students.map((s) => ({
+        ...s,
+        status: "Unchecked",
+        checkedInAt: undefined,
+        issue: undefined,
+      }));
+
       const req: CheckInRequest = {
         id: Date.now(),
         title: checkInTitle || "Instant Safety Check-In",
