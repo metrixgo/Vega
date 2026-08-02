@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { addJoinedEventToUser, addOrganizedEventToUser, getCurrentUser, logoutUser, removeOrganizedEventFromUser, User } from "@/lib/auth";
+import { getGeminiApiKey, setGeminiApiKey } from "@/lib/gemini-settings";
 import type { EventData } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -24,6 +25,8 @@ export default function DashboardPage() {
   const [eventDesc, setEventDesc] = useState("");
   const [eventCategory, setEventCategory] = useState("Camp");
   const [maxCapacity, setMaxCapacity] = useState(20);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState("");
 
   useEffect(() => {
     const current = getCurrentUser();
@@ -33,7 +36,13 @@ export default function DashboardPage() {
       setUser(current);
       if (current.name) setParticipantName(current.name);
     }
+    setGeminiApiKeyInput(getGeminiApiKey());
   }, [router]);
+
+  const handleSaveGeminiApiKey = () => {
+    setGeminiApiKey(geminiApiKeyInput);
+    setShowSettingsModal(false);
+  };
 
   const handleLogout = () => {
     logoutUser();
@@ -173,6 +182,9 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <button onClick={() => setShowSettingsModal(true)} className="secondary text-sm">
+              Settings
+            </button>
             <button onClick={handleLogout} className="secondary text-sm">
               Sign Out
             </button>
@@ -326,6 +338,42 @@ export default function DashboardPage() {
           )}
         </section>
       </div>
+
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-slate-900">Settings</h2>
+              <button onClick={() => setShowSettingsModal(false)} className="text-slate-400 hover:text-slate-600">
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Gemini API Key</label>
+                <input
+                  type="password"
+                  value={geminiApiKeyInput}
+                  onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+                  placeholder="Paste your Gemini API key"
+                  className="field mt-1.5"
+                />
+                <p className="mt-2 text-xs text-slate-500">Saved locally in this browser. The AI assistant uses it only for this device.</p>
+              </div>
+
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setShowSettingsModal(false)} className="secondary flex-1">
+                  Cancel
+                </button>
+                <button type="button" onClick={handleSaveGeminiApiKey} className="primary flex-1 font-semibold">
+                  Save Key
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Event Modal */}
       {showCreateModal && (
