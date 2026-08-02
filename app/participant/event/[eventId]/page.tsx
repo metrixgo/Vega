@@ -28,7 +28,7 @@ export default function ParticipantEventPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const rawCode = (params?.eventId as string) || "VEGA-MAIN";
+  const rawCode = (params?.eventId as string) || "8492";
   const code = rawCode.toUpperCase();
 
   const queryName = searchParams?.get("name") || "";
@@ -54,18 +54,16 @@ export default function ParticipantEventPage() {
   const prevEmergencyRef = useRef<string | null>(null);
   const prevCheckInIdRef = useRef<number | null>(null);
 
+  // Require Authentication Lock & Auto-Request Push Permission
   useEffect(() => {
-    setNotifGranted(isNotificationGranted());
-    if (!name) {
-      const user = getCurrentUser();
-      if (user) {
-        setName(user.name);
-      } else {
-        const promptName = prompt("Please enter your full name to check in:", "Guest") || "Guest";
-        setName(promptName);
-      }
+    const user = getCurrentUser();
+    if (!user) {
+      router.push("/");
+      return;
     }
-  }, [name]);
+    if (!name && user.name) setName(user.name);
+    requestNotificationPermission().then((granted) => setNotifGranted(granted));
+  }, [name, router]);
 
   const handleEnableNotifs = async () => {
     const granted = await requestNotificationPermission();
@@ -88,9 +86,6 @@ export default function ParticipantEventPage() {
           const errData = await res.json();
 
           if (errData.deleted) {
-            if (typeof window !== "undefined") {
-              localStorage.removeItem(`vega_cache_event_${code}`);
-            }
             alert("This event has been deleted by the organizer.");
             removeJoinedEventFromUser(code);
             router.push("/dashboard");
@@ -126,9 +121,6 @@ export default function ParticipantEventPage() {
         const data: EventData = await res.json();
 
         if (data.deleted) {
-          if (typeof window !== "undefined") {
-            localStorage.removeItem(`vega_cache_event_${code}`);
-          }
           alert("This event has been deleted by the organizer.");
           removeJoinedEventFromUser(code);
           router.push("/dashboard");
@@ -170,14 +162,14 @@ export default function ParticipantEventPage() {
             prevCheckInIdRef.current = data.checkInRequest.id;
           }
 
-          // Native Popup Notification for New Announcements
+          // Native System-Level Background Push Notification for New Announcements
           if (currentNotices.length > prevNoticeCountRef.current && prevNoticeCountRef.current > 0) {
             const latest = currentNotices[0];
             triggerNotification("📢 Announcement from Organizer", { body: latest.text }, "notice");
           }
           prevNoticeCountRef.current = currentNotices.length;
 
-          // Native Popup Notification for Emergency Alert
+          // Native System-Level Background Push Notification for Emergency Alert
           if (serverEmergency && serverEmergency !== prevEmergencyRef.current && serverEmergency !== dismissedEmergencyText) {
             triggerNotification("🚨 EMERGENCY ALERT - TAKE ACTION", { body: serverEmergency }, "emergency");
           }
@@ -263,30 +255,35 @@ export default function ParticipantEventPage() {
     handleUpdateStatus("Needs help", issue);
   };
 
+  // Atomic Clear Emergency (Fixes Race Condition Bug)
   const handleClearEmergency = async () => {
     if (activeEmergency) {
       setDismissedEmergencyText(activeEmergency);
     }
     setActiveEmergency(null);
-    handleUpdateStatus("Safe");
+    setStatus("Safe");
 
     try {
       await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "clear_emergency", code }),
+        body: JSON.stringify({
+          action: "clear_emergency",
+          code,
+          studentId,
+          studentName: name,
+          phone,
+          status: "Safe",
+        }),
       });
     } catch {
       /* ignore */
     }
   };
 
+  // Safe Leave Event (Fixes Ghost Deletion Bug)
   const handleLeaveEvent = async () => {
     if (!confirm("Are you sure you want to leave this event session?")) return;
-
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(`vega_cache_event_${code}`);
-    }
 
     try {
       await fetch("/api/event", {
@@ -321,7 +318,7 @@ export default function ParticipantEventPage() {
               🔔 Enable Notifications
             </button>
           )}
-          <span className="rounded-lg bg-slate-100 px-3 py-1 font-mono text-xs font-bold text-slate-800">{code}</span>
+          <span className="rounded-lg bg-slate-900 text-white px-3 py-1 font-mono text-sm font-extrabold tracking-widest">{code}</span>
           <button onClick={handleLeaveEvent} className="text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg ring-1 ring-red-200">
             Leave Event
           </button>

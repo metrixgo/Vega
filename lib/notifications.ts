@@ -1,5 +1,9 @@
 // Helper for Native Browser Push Notifications, Service Workers & Audio/Vibration Alerts
 
+import { VAPID_PUBLIC_KEY } from "@/lib/push-config";
+
+export { VAPID_PUBLIC_KEY };
+
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (typeof window !== "undefined" && "serviceWorker" in navigator) {
     try {
@@ -17,7 +21,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
   try {
     const permission = await Notification.requestPermission();
     if (permission === "granted") {
-      registerServiceWorker();
+      await registerServiceWorker();
       return true;
     }
     return false;
@@ -29,6 +33,53 @@ export async function requestNotificationPermission(): Promise<boolean> {
 export function isNotificationGranted(): boolean {
   if (typeof window === "undefined" || !("Notification" in window)) return false;
   return Notification.permission === "granted";
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+/** Subscribe to background Web Push for an event and register with the server. */
+export async function subscribeToPushNotifications(eventCode: string): Promise<boolean> {
+  if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    return false;
+  }
+
+  const granted = await requestNotificationPermission();
+  if (!granted) return false;
+
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let subscription = await reg.pushManager.getSubscription();
+
+    if (!subscription) {
+      subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as unknown as BufferSource,
+      });
+    }
+
+    await fetch("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventCode,
+        subscription: subscription.toJSON(),
+      }),
+    });
+
+    return true;
+  } catch (err) {
+    console.error("Push subscription error:", err);
+    return false;
+  }
 }
 
 export function playAlertSound(type: "emergency" | "notice" | "help" = "notice") {
@@ -68,7 +119,6 @@ export function vibrateDevice(pattern: number[] = [200, 100, 200]) {
 }
 
 export async function triggerNotification(title: string, options?: NotificationOptions, type: "emergency" | "notice" | "help" = "notice") {
-  // Always trigger sound & vibration
   playAlertSound(type);
   vibrateDevice(type === "emergency" ? [400, 150, 400, 150, 400] : [200, 100, 200]);
 
@@ -89,7 +139,6 @@ export async function triggerNotification(title: string, options?: NotificationO
         }
       }
 
-      // Fallback for browsers without active service worker registration
       new Notification(title, {
         icon: "/images/logo.png",
         badge: "/favicon.ico",

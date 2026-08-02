@@ -42,7 +42,9 @@ export default function DashboardPage() {
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-    const code = `VEGA-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    // Generate a simple 4-digit numerical code (e.g., 8492)
+    const code = Math.floor(1000 + Math.random() * 9000).toString();
 
     try {
       await fetch("/api/event", {
@@ -73,14 +75,14 @@ export default function DashboardPage() {
     e.preventDefault();
     setJoinError(null);
     if (!newJoinCode.trim() || !user) return;
-    const code = newJoinCode.trim().toUpperCase();
+    const code = newJoinCode.trim();
 
     try {
       // Validate code & capacity
       const checkRes = await fetch(`/api/event?code=${encodeURIComponent(code)}`);
       if (!checkRes.ok) {
         const errData = await checkRes.json();
-        setJoinError(errData.error || "Invalid Event Code. Event does not exist.");
+        setJoinError(errData.error || "Invalid 4-digit Event Code. Event does not exist.");
         return;
       }
 
@@ -113,7 +115,7 @@ export default function DashboardPage() {
   };
 
   const handleDeleteEvent = async (code: string) => {
-    if (!confirm(`Are you sure you want to permanently delete event ${code}? This action cannot be undone.`)) return;
+    if (!confirm(`Are you sure you want to permanently delete event code ${code}? This action cannot be undone.`)) return;
 
     try {
       await fetch("/api/event", {
@@ -179,7 +181,7 @@ export default function DashboardPage() {
                 }}
                 className="secondary px-5 py-3 text-sm font-semibold"
               >
-                Join Event with Code
+                Join Event with 4-Digit Code
               </button>
             </div>
           </div>
@@ -197,7 +199,7 @@ export default function DashboardPage() {
           {user.organizedEvents.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
               <p className="font-semibold text-slate-700">No organized events yet</p>
-              <p className="mt-1 text-xs text-slate-500">Events you create are permanently saved to your account dashboard until you manually delete them.</p>
+              <p className="mt-1 text-xs text-slate-500">Events you create generate a 4-digit code and persist until you manually delete them.</p>
               <button
                 onClick={() => {
                   setEventName("");
@@ -214,7 +216,10 @@ export default function DashboardPage() {
                 <div key={code} className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200 flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-start">
-                      <span className="rounded-lg bg-slate-100 px-3 py-1 font-mono text-sm font-bold text-slate-800">{code}</span>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] uppercase font-bold text-slate-400">Join Code</span>
+                        <span className="rounded-lg bg-slate-900 text-white px-3 py-1 font-mono text-base font-extrabold tracking-widest">{code}</span>
+                      </div>
                       <span className="text-[10px] uppercase font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded ring-1 ring-emerald-200">
                         Organizer
                       </span>
@@ -253,7 +258,7 @@ export default function DashboardPage() {
           {user.joinedEvents.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
               <p className="font-semibold text-slate-700">No joined events yet</p>
-              <p className="mt-1 text-xs text-slate-500">Enter an event code shared by your organizer to join their safety check-in room.</p>
+              <p className="mt-1 text-xs text-slate-500">Enter a 4-digit code shared by your organizer to join their safety check-in room.</p>
               <button
                 onClick={() => {
                   setJoinError(null);
@@ -270,7 +275,10 @@ export default function DashboardPage() {
                 <div key={code} className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200 flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-start">
-                      <span className="rounded-lg bg-slate-100 px-3 py-1 font-mono text-sm font-bold text-slate-800">{code}</span>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] uppercase font-bold text-slate-400">Event Code</span>
+                        <span className="rounded-lg bg-slate-100 px-3 py-1 font-mono text-sm font-bold text-slate-800 tracking-wider">{code}</span>
+                      </div>
                       <span className="text-[10px] uppercase font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded ring-1 ring-blue-200">
                         Participant
                       </span>
@@ -294,7 +302,7 @@ export default function DashboardPage() {
         </section>
       </div>
 
-      {/* Enhanced Create Event Modal */}
+      {/* Create Event Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl">
@@ -353,7 +361,7 @@ export default function DashboardPage() {
               </div>
 
               <button type="submit" className="primary w-full py-3 mt-2 font-semibold">
-                Create & Launch Control Center
+                Generate 4-Digit Code & Launch
               </button>
             </form>
           </div>
@@ -365,7 +373,7 @@ export default function DashboardPage() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-slate-900">Join Event</h2>
+              <h2 className="text-xl font-bold text-slate-900">Join Event with 4-Digit Code</h2>
               <button onClick={() => setShowJoinModal(false)} className="text-slate-400 hover:text-slate-600">
                 ✕
               </button>
@@ -379,14 +387,15 @@ export default function DashboardPage() {
 
             <form onSubmit={handleJoinEvent} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700">Event Code</label>
+                <label className="block text-sm font-medium text-slate-700">4-Digit Event Code</label>
                 <input
                   type="text"
                   required
+                  maxLength={6}
                   value={newJoinCode}
                   onChange={(e) => setNewJoinCode(e.target.value)}
-                  placeholder="VEGA-8492"
-                  className="field mt-1.5 font-mono uppercase"
+                  placeholder="e.g. 8492"
+                  className="field mt-1.5 font-mono text-lg font-bold text-center tracking-widest uppercase"
                 />
               </div>
 

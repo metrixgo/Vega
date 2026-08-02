@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import type { EventData, Student, Status, Notice, CheckInRequest } from "@/lib/types";
+import { normalizeEventCode, isValidEventCode } from "@/lib/event-codes";
+import { sendPushToEvent } from "@/lib/push-server";
+import type { EventData, Student, Notice, CheckInRequest } from "@/lib/types";
 
-// Global in-memory cache for fast local access
 const globalEvents = globalThis as unknown as {
   _vegaEvents?: Map<string, EventData>;
   _vegaDiskLoaded?: boolean;
@@ -16,7 +17,16 @@ if (!globalEvents._vegaEvents) {
 
 const events = globalEvents._vegaEvents;
 
-// Helper to determine persistent storage file path
+/** Only the explicit delete action may mark an event as deleted. */
+const PARTICIPANT_ACTIONS = new Set([
+  "join",
+  "leave",
+  "update_status",
+  "update_location",
+  "confirm_check_in",
+  "dismiss_emergency",
+]);
+
 function getStoragePath(): string {
   try {
     const dataDir = path.join(process.cwd(), "data");
@@ -29,7 +39,6 @@ function getStoragePath(): string {
   }
 }
 
-// Load events from persistent disk storage
 function loadDiskEvents() {
   if (globalEvents._vegaDiskLoaded) return;
   try {
@@ -38,7 +47,8 @@ function loadDiskEvents() {
       const raw = fs.readFileSync(filePath, "utf-8");
       const parsed: Record<string, EventData> = JSON.parse(raw);
       for (const [code, data] of Object.entries(parsed)) {
-        events.set(code, data);
+        const normalized = normalizeEventCode(code);
+        events.set(normalized, { ...data, code: normalized });
       }
     }
   } catch (err) {
@@ -48,7 +58,6 @@ function loadDiskEvents() {
   }
 }
 
-// Save events to persistent disk storage
 function saveDiskEvents() {
   try {
     const filePath = getStoragePath();
@@ -60,6 +69,17 @@ function saveDiskEvents() {
   } catch (err) {
     console.error("Failed to save disk events:", err);
   }
+}
+
+function generateUniqueCode(): string {
+  let attempts = 0;
+  while (attempts < 100) {
+    const code = String(Math.floor(1000 + Math.random() * 9000));
+    const existing = events.get(code);
+    if (!existing || existing.deleted) return code;
+    attempts++;
+  }
+  return String(Date.now()).slice(-4);
 }
 
 function findStudentIndex(students: Student[], query: { id?: number; phone?: string; name?: string }): number {
@@ -110,12 +130,20 @@ function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
 export async function GET(request: NextRequest) {
   loadDiskEvents();
   const { searchParams } = new URL(request.url);
-  const code = (searchParams.get("code") || "VEGA-MAIN").toUpperCase();
+  const code = normalizeEventCode(searchParams.get("code") || "");
+
+  if (!code || !isValidEventCode(code)) {
+    return NextResponse.json({ error: "Invalid event code format." }, { status: 400 });
+  }
 
   const event = events.get(code);
 
-  if (!event || event.deleted) {
-    return NextResponse.json({ error: "Event code does not exist.", deleted: true }, { status: 404 });
+  if (!event) {
+    return NextResponse.json({ error: "Event code does not exist.", exists: false }, { status: 404 });
+  }
+
+  if (event.deleted) {
+    return NextResponse.json({ error: "Event has been deleted.", deleted: true }, { status: 404 });
   }
 
   return NextResponse.json(event);
@@ -142,22 +170,30 @@ export async function POST(request: NextRequest) {
       text,
       checkInTitle,
       scheduledTime,
-      eventData, // Cached payload for restore action
+      eventData,
     } = body;
 
-    const code = (rawCode || "VEGA-MAIN").toUpperCase();
+    const code = normalizeEventCode(rawCode || "");
     let event: EventData | null | undefined = events.get(code);
 
-    // Action: RESTORE (re-hydrates event from client cache if missing from server RAM/disk)
+    // Participant actions must never delete an event
+    if (PARTICIPANT_ACTIONS.has(action) && event?.deleted) {
+      return NextResponse.json({ error: "Event has been deleted.", deleted: true }, { status: 404 });
+    }
+
+    // Action: RESTORE (organizer-only recovery — never restore deleted events)
     if (action === "restore" && eventData) {
-      if (!event || !event.deleted) {
+      if (event?.deleted) {
+        return NextResponse.json({ error: "Event has been deleted.", deleted: true }, { status: 404 });
+      }
+      if (!eventData.deleted && !event) {
         event = {
           code,
           name: eventData.name || "Group Safety Event",
           description: eventData.description || "",
           category: eventData.category || "General",
           maxParticipants: eventData.maxParticipants || 20,
-          students: mergeStudents(event?.students || [], eventData.students || []),
+          students: mergeStudents([], eventData.students || []),
           notices: eventData.notices || [],
           emergency: eventData.emergency || null,
           checkInRequest: eventData.checkInRequest || null,
@@ -167,13 +203,18 @@ export async function POST(request: NextRequest) {
         events.set(code, event);
         saveDiskEvents();
       }
-      return NextResponse.json(event);
+      return NextResponse.json(event || { error: "Nothing to restore" });
     }
 
     // Action: CREATE
     if (action === "create") {
+      const newCode = code && isValidEventCode(code) ? code : generateUniqueCode();
+      if (events.get(newCode) && !events.get(newCode)?.deleted) {
+        return NextResponse.json({ error: "Event code already in use. Please try again." }, { status: 409 });
+      }
+
       event = {
-        code,
+        code: newCode,
         name: eventName || "Group Safety Event",
         description: eventDesc || "",
         category: eventCat || "General",
@@ -185,14 +226,13 @@ export async function POST(request: NextRequest) {
         deleted: false,
         updatedAt: Date.now(),
       };
-      events.set(code, event);
+      events.set(newCode, event);
       saveDiskEvents();
       return NextResponse.json(event);
     }
 
-    // Check if event is valid / deleted for non-create actions
     if (!event || event.deleted) {
-      return NextResponse.json({ error: "Invalid Event Code. Event does not exist.", deleted: true }, { status: 404 });
+      return NextResponse.json({ error: "Invalid Event Code. Event does not exist.", deleted: !!event?.deleted }, { status: 404 });
     }
 
     event.updatedAt = Date.now();
@@ -202,7 +242,6 @@ export async function POST(request: NextRequest) {
     const targetId = typeof studentId === "number" ? studentId : undefined;
 
     if (action === "join") {
-      // Check Capacity Limit
       const existingIdx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
       if (existingIdx < 0 && event.maxParticipants && event.students.length >= event.maxParticipants) {
         return NextResponse.json(
@@ -275,7 +314,6 @@ export async function POST(request: NextRequest) {
         });
       }
     } else if (action === "trigger_check_in") {
-      // Reset all participants' check-in status so count starts at 0 checked-in for new request!
       event.students = event.students.map((s) => ({
         ...s,
         status: "Unchecked",
@@ -306,10 +344,26 @@ export async function POST(request: NextRequest) {
       if (text) {
         const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
         event.notices.unshift({ id: Date.now(), text, time: timeStr });
+
+        sendPushToEvent(code, {
+          title: "📢 Announcement from Organizer",
+          body: text,
+          url: `/participant/event/${code}`,
+          tag: `announcement-${code}`,
+        }).catch((err) => console.error("Push send error:", err));
       }
     } else if (action === "emergency") {
       event.emergency = text || null;
+    } else if (action === "dismiss_emergency") {
+      // Participant-only: mark themselves safe without clearing the global emergency
+      const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
+      if (idx >= 0) {
+        event.students[idx].status = "Safe";
+        event.students[idx].issue = undefined;
+        event.students[idx].lastSeen = "Just now";
+      }
     } else if (action === "clear_emergency") {
+      // Organizer-only: clears the global emergency alert for all participants
       event.emergency = null;
     } else if (action === "mark_safe") {
       const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
@@ -333,6 +387,11 @@ export async function POST(request: NextRequest) {
       events.set(code, event);
       saveDiskEvents();
       return NextResponse.json({ success: true, deleted: true, code });
+    }
+
+    // Safety guard: participant actions must never leave the event in a deleted state
+    if (PARTICIPANT_ACTIONS.has(action)) {
+      event.deleted = false;
     }
 
     events.set(code, event);

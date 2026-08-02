@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { removeOrganizedEventFromUser } from "@/lib/auth";
+import { getCurrentUser, removeOrganizedEventFromUser } from "@/lib/auth";
 import { isNotificationGranted, requestNotificationPermission, triggerNotification } from "@/lib/notifications";
 import type { Status, Student, Notice, CheckInRequest, EventData } from "@/lib/types";
 
@@ -32,7 +32,7 @@ function Badge({ status }: { status: Status }) {
 export default function OrganizerEventPage() {
   const params = useParams();
   const router = useRouter();
-  const rawCode = (params?.eventId as string) || "VEGA-MAIN";
+  const rawCode = (params?.eventId as string) || "8492";
   const code = rawCode.toUpperCase();
 
   const [eventData, setEventData] = useState<EventData | null>(null);
@@ -56,9 +56,15 @@ export default function OrganizerEventPage() {
   const [notifGranted, setNotifGranted] = useState(false);
   const prevHelpStudentsRef = useRef<Set<number>>(new Set());
 
+  // Require Authentication Lock & Auto-Request Notifications
   useEffect(() => {
-    setNotifGranted(isNotificationGranted());
-  }, []);
+    const user = getCurrentUser();
+    if (!user) {
+      router.push("/");
+      return;
+    }
+    requestNotificationPermission().then((granted) => setNotifGranted(granted));
+  }, [router]);
 
   const handleEnableNotifs = async () => {
     const granted = await requestNotificationPermission();
@@ -187,6 +193,7 @@ export default function OrganizerEventPage() {
       if (res.ok) {
         const data = await res.json();
         setNotices(data.notices || []);
+        triggerNotification("📢 Announcement Broadcasted", { body: noticeText.trim() }, "notice");
         setNoticeText("");
       }
     } catch {
@@ -211,6 +218,7 @@ export default function OrganizerEventPage() {
       if (res.ok) {
         const data = await res.json();
         setCheckInReq(data.checkInRequest);
+        triggerNotification("⏱ Check-In Request Sent", { body: checkInTitle.trim() }, "notice");
       }
     } catch {
       /* ignore */
@@ -238,6 +246,7 @@ export default function OrganizerEventPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "emergency", code, text: alertText }),
       });
+      triggerNotification("🚨 EMERGENCY DECLARED", { body: alertText }, "emergency");
     } catch {
       /* ignore */
     }
@@ -260,7 +269,7 @@ export default function OrganizerEventPage() {
   };
 
   const handleDeleteEvent = async () => {
-    if (!confirm(`Are you sure you want to delete event ${code}? This will remove it permanently for all participants.`)) return;
+    if (!confirm(`Are you sure you want to delete event code ${code}? This will remove it permanently for all participants.`)) return;
 
     if (typeof window !== "undefined") {
       localStorage.removeItem(`vega_cache_event_${code}`);
@@ -302,8 +311,8 @@ export default function OrganizerEventPage() {
             </button>
           )}
           <div className="flex flex-col items-end">
-            <span className="text-[10px] uppercase font-bold text-slate-400">Share Code</span>
-            <span className="rounded-lg bg-slate-100 px-3 py-1 font-mono text-xs font-bold text-slate-800">{code}</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400">Join Code</span>
+            <span className="rounded-lg bg-slate-900 text-white px-3 py-1 font-mono text-sm font-extrabold tracking-widest">{code}</span>
           </div>
           <Link href="/dashboard" className="text-sm font-medium text-slate-500 hover:text-slate-900">
             ← Dashboard
@@ -402,8 +411,8 @@ export default function OrganizerEventPage() {
                   {students.length === 0 ? (
                     <div>
                       <p className="font-medium text-slate-600">No participants joined yet</p>
-                      <p className="mt-1 text-xs text-slate-400">Have participants open the Vercel URL on their phone and enter code:</p>
-                      <div className="mt-3 inline-block rounded-lg bg-slate-100 px-3.5 py-2 font-mono text-sm font-bold text-slate-800">{code}</div>
+                      <p className="mt-1 text-xs text-slate-400">Have participants open the app and enter 4-digit code:</p>
+                      <div className="mt-3 inline-block rounded-lg bg-slate-900 text-white px-4 py-2 font-mono text-lg font-extrabold tracking-widest">{code}</div>
                     </div>
                   ) : (
                     "No participants match search query."
@@ -496,7 +505,7 @@ export default function OrganizerEventPage() {
         <section className="mt-6 grid gap-6 lg:grid-cols-2">
           <div className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200">
             <h2 className="font-semibold text-slate-900">Broadcast Announcement</h2>
-            <p className="text-xs text-slate-400 mt-1">Pushes native popup notification & audio alert to all participant phones</p>
+            <p className="text-xs text-slate-400 mt-1">Pushes native background push notification to all participant phones</p>
             <textarea
               value={noticeText}
               onChange={(e) => setNoticeText(e.target.value)}

@@ -19,12 +19,6 @@ export default function LandingPage() {
   const [role, setRole] = useState<"organizer" | "participant">("organizer");
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Guest Quick Join state
-  const [joinCode, setJoinCode] = useState("");
-  const [guestName, setGuestName] = useState("");
-  const [guestPhone, setGuestPhone] = useState("");
-  const [showGuestJoin, setShowGuestJoin] = useState(false);
-
   useEffect(() => {
     setUser(getCurrentUser());
   }, []);
@@ -52,36 +46,14 @@ export default function LandingPage() {
     }
   };
 
-  const handleGuestCreate = async () => {
-    const code = `VEGA-${Math.floor(1000 + Math.random() * 9000)}`;
-    try {
-      await fetch("/api/event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create", code }),
-      });
-    } catch {
-      /* ignore */
+  const handleRequireAuthAction = () => {
+    if (user) {
+      router.push("/dashboard");
+    } else {
+      setAuthMode("login");
+      setAuthError(null);
+      setShowAuthModal(true);
     }
-    router.push(`/organizer/event/${code}`);
-  };
-
-  const handleGuestJoin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!joinCode.trim() || !guestName.trim()) return;
-    const cleanCode = joinCode.trim().toUpperCase();
-
-    try {
-      await fetch("/api/event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "join", code: cleanCode, name: guestName.trim(), phone: guestPhone.trim() }),
-      });
-    } catch {
-      /* ignore */
-    }
-
-    router.push(`/participant/event/${cleanCode}?name=${encodeURIComponent(guestName)}&phone=${encodeURIComponent(guestPhone)}`);
   };
 
   return (
@@ -139,13 +111,13 @@ export default function LandingPage() {
               Stay connected when it matters most.
             </h1>
             <p className="mt-6 max-w-lg text-base leading-7 text-slate-600 sm:text-lg sm:leading-8">
-              A real-time safety hub for trips, events, and outdoor group activities. Track live locations on mobile maps, send instant check-ins, and broadcast emergency popups across devices.
+              A real-time safety hub for trips, retreats, and outdoor group activities. Track live locations on mobile maps, send instant check-ins, and broadcast emergency popups across devices.
             </p>
 
             <div className="mt-8 flex flex-wrap gap-4">
               {user ? (
                 <Link href="/dashboard" className="primary px-6 py-3.5 text-base shadow-sm">
-                  Open Account Dashboard
+                  Open Account Dashboard →
                 </Link>
               ) : (
                 <>
@@ -157,10 +129,17 @@ export default function LandingPage() {
                     }}
                     className="primary px-6 py-3.5 text-base shadow-sm"
                   >
-                    Create Account
+                    Register Account to Start
                   </button>
-                  <button onClick={handleGuestCreate} className="secondary px-6 py-3.5 text-base">
-                    Quick Create Event
+                  <button
+                    onClick={() => {
+                      setAuthMode("login");
+                      setAuthError(null);
+                      setShowAuthModal(true);
+                    }}
+                    className="secondary px-6 py-3.5 text-base"
+                  >
+                    Sign In
                   </button>
                 </>
               )}
@@ -171,26 +150,26 @@ export default function LandingPage() {
             <div className="rounded-2xl bg-white p-6 shadow-sm border border-slate-200">
               <h2 className="font-semibold text-slate-900 text-lg">Organize an Event</h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                Create a persistent safety room, monitor live participant GPS pins on interactive Leaflet maps, and broadcast alerts.
+                Create persistent safety rooms, monitor live participant GPS pins on interactive Leaflet maps, and broadcast alerts.
               </p>
               <button
-                onClick={user ? () => router.push("/dashboard") : handleGuestCreate}
+                onClick={handleRequireAuthAction}
                 className="mt-4 inline-flex items-center gap-2 font-semibold text-slate-900 underline underline-offset-4"
               >
-                Create event now →
+                {user ? "Go to Dashboard →" : "Sign In / Register to Organize →"}
               </button>
             </div>
 
             <div className="rounded-2xl bg-white p-6 shadow-sm border border-slate-200">
               <h2 className="font-semibold text-slate-900 text-lg">Join an Event</h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                Enter an event code shared by your organizer, share your live GPS position, and check in safe.
+                Enter a 4-digit numerical code shared by your organizer, share your live GPS position, and check in safe.
               </p>
               <button
-                onClick={() => setShowGuestJoin(true)}
+                onClick={handleRequireAuthAction}
                 className="mt-4 inline-flex items-center gap-2 font-semibold text-slate-900 underline underline-offset-4"
               >
-                Enter event code →
+                {user ? "Enter Event Code →" : "Sign In / Register to Join →"}
               </button>
             </div>
           </div>
@@ -297,61 +276,6 @@ export default function LandingPage() {
                 </p>
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Guest Join Modal */}
-      {showGuestJoin && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-slate-900">Join Event</h2>
-              <button onClick={() => setShowGuestJoin(false)} className="text-slate-400 hover:text-slate-600">
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleGuestJoin} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700">Event Code</label>
-                <input
-                  type="text"
-                  required
-                  value={joinCode}
-                  onChange={(e) => setJoinCode(e.target.value)}
-                  placeholder="VEGA-8492"
-                  className="field mt-1.5 font-mono uppercase"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700">Your Full Name</label>
-                <input
-                  type="text"
-                  required
-                  value={guestName}
-                  onChange={(e) => setGuestName(e.target.value)}
-                  placeholder="John Smith"
-                  className="field mt-1.5"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700">Emergency Phone</label>
-                <input
-                  type="tel"
-                  value={guestPhone}
-                  onChange={(e) => setGuestPhone(e.target.value)}
-                  placeholder="(555) 123-4567"
-                  className="field mt-1.5"
-                />
-              </div>
-
-              <button type="submit" className="primary w-full py-3 mt-2 font-semibold">
-                Join Event Now
-              </button>
-            </form>
           </div>
         </div>
       )}
