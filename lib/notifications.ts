@@ -1,10 +1,26 @@
-// Helper for Native Browser Notifications & Audio/Vibration Alerts
+// Helper for Native Browser Push Notifications, Service Workers & Audio/Vibration Alerts
+
+export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+  if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      return reg;
+    } catch (err) {
+      console.error("Service worker registration error:", err);
+    }
+  }
+  return null;
+}
 
 export async function requestNotificationPermission(): Promise<boolean> {
   if (typeof window === "undefined" || !("Notification" in window)) return false;
   try {
     const permission = await Notification.requestPermission();
-    return permission === "granted";
+    if (permission === "granted") {
+      registerServiceWorker();
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -51,7 +67,7 @@ export function vibrateDevice(pattern: number[] = [200, 100, 200]) {
   }
 }
 
-export function triggerNotification(title: string, options?: NotificationOptions, type: "emergency" | "notice" | "help" = "notice") {
+export async function triggerNotification(title: string, options?: NotificationOptions, type: "emergency" | "notice" | "help" = "notice") {
   // Always trigger sound & vibration
   playAlertSound(type);
   vibrateDevice(type === "emergency" ? [400, 150, 400, 150, 400] : [200, 100, 200]);
@@ -60,13 +76,27 @@ export function triggerNotification(title: string, options?: NotificationOptions
 
   if (Notification.permission === "granted") {
     try {
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) {
+          reg.showNotification(title, {
+            icon: "/images/logo.png",
+            badge: "/favicon.ico",
+            tag: type === "emergency" ? "emergency-alert" : "notice-alert",
+            ...options,
+          });
+          return;
+        }
+      }
+
+      // Fallback for browsers without active service worker registration
       new Notification(title, {
         icon: "/images/logo.png",
         badge: "/favicon.ico",
         ...options,
       });
-    } catch {
-      /* ignore */
+    } catch (err) {
+      console.error("Trigger notification error:", err);
     }
   }
 }

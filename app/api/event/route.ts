@@ -160,12 +160,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const code = (searchParams.get("code") || "VEGA-MAIN").toUpperCase();
 
-  let event = events.get(code);
-  if (!event || Date.now() - event.updatedAt > 4000) {
-    const cloudData = await fetchCloudEvent(code);
-    if (cloudData) {
-      event = cloudData;
-    }
+  let event: EventData | null | undefined = events.get(code);
+  if (!event) {
+    event = await fetchCloudEvent(code);
   }
 
   if (!event || event.deleted) {

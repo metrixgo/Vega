@@ -5,6 +5,7 @@ import "leaflet/dist/leaflet.css";
 export const metadata: Metadata = {
   title: "Vega Safety Manager",
   description: "Event safety coordination for real-time check-ins and emergency management",
+  manifest: "/manifest.json",
   icons: {
     icon: "/favicon.ico",
     apple: "/images/logo.png",
