@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+body { margin: 0; background: #f6f8fa; color: #17202c; font-family: Arial, Helvetica, sans-serif; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+.field { width: 100%; border-radius: .75rem; border: 1px solid #e2e8f0; background: white; padding: .75rem .875rem; outline: none; }
+.field:focus { border-color: #64748b; box-shadow: 0 0 0 2px #cbd5e1; }
+.primary, .secondary, .danger { border-radius: .75rem; padding: .7rem 1rem; font-size: .875rem; font-weight: 600; transition: background-color .15s ease; }
+.primary { background: #17202c; color: white; }
+.primary:hover { background: #263444; }
+.secondary { border: 1px solid #e2e8f0; background: white; color: #334155; }
+.secondary:hover { background: #f8fafc; }
+.danger { background: #dc2626; color: white; }
+.danger:hover { background: #b91c1c; }
+.leaflet-container { height: 100%; width: 100%; font-family: inherit; z-index: 0; }
+.map-dot { width: 16px; height: 16px; border: 3px solid white; border-radius: 999px; box-shadow: 0 2px 8px rgba(0,0,0,.28); }
