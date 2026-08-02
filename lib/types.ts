@@ -30,6 +30,7 @@ export type ChatMessage = {
   senderId: string; // "organizer" or student.id / name / phone
   senderName: string;
   recipientId: string; // "organizer" or student.id / name / phone
+  recipientName?: string;
   text: string;
   time: string;
   read: boolean;

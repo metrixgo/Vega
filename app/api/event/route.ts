@@ -265,7 +265,7 @@ export async function POST(request: NextRequest) {
     } else if (action === "send_message") {
       if (text && senderId && recipientId) {
         const newMsg: ChatMessage = {
-          id: Date.now(),
+          id: Date.now() + Math.floor(Math.random() * 1000),
           senderId: String(senderId),
           senderName: senderName || "User",
           recipientId: String(recipientId),

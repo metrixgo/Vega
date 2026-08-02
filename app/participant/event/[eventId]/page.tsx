@@ -59,7 +59,15 @@ export default function ParticipantEventPage() {
   const prevNoticeCountRef = useRef<number>(0);
   const prevEmergencyRef = useRef<string | null>(null);
   const prevCheckInIdRef = useRef<number | null>(null);
-  const prevMessageCountRef = useRef<number>(0);
+  const prevLastMessageIdRef = useRef<number>(0);
+
+  const myParticipantId = useMemo(() => {
+    if (studentId) return String(studentId);
+    const me = eventData?.students?.find(
+      (s) => s.name.toLowerCase() === name.toLowerCase() || (phone && s.phone === phone)
+    );
+    return me ? String(me.id) : "";
+  }, [studentId, eventData, name, phone]);
 
   // Require Authentication Lock & Auto-Request Push Permission
   useEffect(() => {
@@ -194,20 +202,23 @@ export default function ParticipantEventPage() {
           // Check for incoming private messages from Organizer
           const incomingOrgMsgs = currentMsgs.filter((m) => {
             if (m.senderId !== "organizer") return false;
-            const sid = studentId ? String(studentId) : "";
             const sName = name.toLowerCase();
             return (
-              (sid && m.recipientId === sid) ||
+              (myParticipantId && m.recipientId === myParticipantId) ||
               m.recipientId.toLowerCase() === sName ||
               (phone && m.recipientId === phone)
             );
           });
 
-          if (incomingOrgMsgs.length > prevMessageCountRef.current && prevMessageCountRef.current > 0) {
+          if (incomingOrgMsgs.length > 0) {
             const latest = incomingOrgMsgs[incomingOrgMsgs.length - 1];
-            triggerNotification("💬 Private Message from Organizer", { body: latest.text }, "notice");
+            if (latest.id > prevLastMessageIdRef.current) {
+              if (prevLastMessageIdRef.current > 0) {
+                triggerNotification("💬 Private Message from Organizer", { body: latest.text }, "notice");
+              }
+              prevLastMessageIdRef.current = latest.id;
+            }
           }
-          prevMessageCountRef.current = incomingOrgMsgs.length;
         }
       } catch (err) {
         console.error("Poll error:", err);
@@ -231,35 +242,36 @@ export default function ParticipantEventPage() {
         document.removeEventListener("visibilitychange", handleVis);
       }
     };
-  }, [code, name, phone, dismissedEmergencyText, studentId, router]);
+  }, [code, name, phone, dismissedEmergencyText, myParticipantId, router]);
 
-  // Robust Message Filter for Participant
   const participantMessages = useMemo(() => {
-    const sid = studentId ? String(studentId) : "";
     const sName = name.toLowerCase();
-
     return messages.filter((m) => {
       const matchFromOrg =
         m.senderId === "organizer" &&
-        ((sid && m.recipientId === sid) || m.recipientId.toLowerCase() === sName || (phone && m.recipientId === phone));
+        ((myParticipantId && m.recipientId === myParticipantId) ||
+          m.recipientId.toLowerCase() === sName ||
+          (phone && m.recipientId === phone));
       const matchToOrg =
         m.recipientId === "organizer" &&
-        ((sid && m.senderId === sid) || m.senderName.toLowerCase() === sName || (phone && m.senderId === phone));
+        ((myParticipantId && m.senderId === myParticipantId) ||
+          m.senderName.toLowerCase() === sName ||
+          (phone && m.senderId === phone));
       return matchFromOrg || matchToOrg;
     });
-  }, [messages, studentId, name, phone]);
+  }, [messages, myParticipantId, name, phone]);
 
   const unreadCount = useMemo(() => {
-    const sid = studentId ? String(studentId) : "";
     const sName = name.toLowerCase();
-
     return messages.filter(
       (m) =>
         !m.read &&
         m.senderId === "organizer" &&
-        ((sid && m.recipientId === sid) || m.recipientId.toLowerCase() === sName || (phone && m.recipientId === phone))
+        ((myParticipantId && m.recipientId === myParticipantId) ||
+          m.recipientId.toLowerCase() === sName ||
+          (phone && m.recipientId === phone))
     ).length;
-  }, [messages, studentId, name, phone]);
+  }, [messages, myParticipantId, name, phone]);
 
   const handleLocate = () => {
     if (typeof window === "undefined" || !navigator.geolocation) {
@@ -351,7 +363,7 @@ export default function ParticipantEventPage() {
 
   const handleSendPrivateMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInputText.trim()) return;
+    if (!chatInputText.trim() || !myParticipantId) return;
 
     try {
       const res = await fetch("/api/event", {
@@ -360,7 +372,7 @@ export default function ParticipantEventPage() {
         body: JSON.stringify({
           action: "send_message",
           code,
-          senderId: String(studentId || name),
+          senderId: myParticipantId,
           senderName: name,
           recipientId: "organizer",
           text: chatInputText.trim(),

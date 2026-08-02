@@ -29,7 +29,7 @@ function Badge({ status }: { status: Status }) {
   );
 }
 
-const EMERGENCY_TEMPLATES = [
+const EMERGENCY_TYPES = [
   {
     type: "Earthquake",
     icon: "🌐",
@@ -72,9 +72,9 @@ export default function OrganizerEventPage() {
 
   // Emergency Modal State
   const [showAlertModal, setShowAlertModal] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<string>("Earthquake");
+  const [emergencyType, setEmergencyType] = useState<string>("Earthquake");
   const [customEmergencyType, setCustomEmergencyType] = useState("");
-  const [alertText, setAlertText] = useState(EMERGENCY_TEMPLATES[0].text);
+  const [alertText, setAlertText] = useState(EMERGENCY_TYPES[0].text);
 
   // Private Chat State
   const [chatInputText, setChatInputText] = useState("");
@@ -87,7 +87,7 @@ export default function OrganizerEventPage() {
 
   const [notifGranted, setNotifGranted] = useState(false);
   const prevHelpStudentsRef = useRef<Set<number>>(new Set());
-  const prevMessageCountRef = useRef<number>(0);
+  const prevLastMessageIdRef = useRef<number>(0);
 
   // Require Authentication Lock & Auto-Request Notifications
   useEffect(() => {
@@ -186,11 +186,15 @@ export default function OrganizerEventPage() {
 
           // Check for new incoming private messages for organizer
           const incomingOrgMsgs = currentMsgs.filter((m) => m.recipientId === "organizer");
-          if (incomingOrgMsgs.length > prevMessageCountRef.current && prevMessageCountRef.current > 0) {
+          if (incomingOrgMsgs.length > 0) {
             const latest = incomingOrgMsgs[incomingOrgMsgs.length - 1];
-            triggerNotification(`💬 Private Message from ${latest.senderName}`, { body: latest.text }, "notice");
+            if (latest.id > prevLastMessageIdRef.current) {
+              if (prevLastMessageIdRef.current > 0) {
+                triggerNotification(`💬 Private Message from ${latest.senderName}`, { body: latest.text }, "notice");
+              }
+              prevLastMessageIdRef.current = latest.id;
+            }
           }
-          prevMessageCountRef.current = incomingOrgMsgs.length;
         }
       } catch (err) {
         console.error("Poll error:", err);
@@ -252,10 +256,10 @@ export default function OrganizerEventPage() {
     ).length;
   };
 
-  const handleSelectTemplate = (template: typeof EMERGENCY_TEMPLATES[0]) => {
-    setSelectedTemplate(template.type);
+  const handleSelectEmergencyType = (item: typeof EMERGENCY_TYPES[0]) => {
+    setEmergencyType(item.type);
     setCustomEmergencyType("");
-    setAlertText(template.text);
+    setAlertText(item.text);
   };
 
   const handleSendNotice = async () => {
@@ -343,8 +347,8 @@ export default function OrganizerEventPage() {
 
   const handleDeclareEmergency = async () => {
     setShowAlertModal(false);
-    const emergencyType = customEmergencyType.trim() || selectedTemplate;
-    const fullEmergencyPayload = `[${emergencyType.toUpperCase()}] ${alertText.trim()}`;
+    const type = customEmergencyType.trim() || emergencyType;
+    const fullEmergencyPayload = `[${type.toUpperCase()}] ${alertText.trim()}`;
 
     try {
       await fetch("/api/event", {
@@ -352,7 +356,7 @@ export default function OrganizerEventPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "emergency", code, text: fullEmergencyPayload }),
       });
-      triggerNotification(`🚨 ${emergencyType.toUpperCase()} EMERGENCY DECLARED`, { body: alertText }, "emergency");
+      triggerNotification(`🚨 ${type.toUpperCase()} EMERGENCY DECLARED`, { body: alertText }, "emergency");
     } catch {
       /* ignore */
     }
@@ -772,18 +776,18 @@ export default function OrganizerEventPage() {
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
             <p className="text-xs font-bold text-red-600 uppercase tracking-wider">HIGH PRIORITY EMERGENCY ALERT</p>
             <h2 className="mt-1 text-2xl font-bold text-slate-900">Declare an Emergency</h2>
-            <p className="mt-1 text-xs text-slate-500">Select a pre-made template or specify a custom emergency type.</p>
+            <p className="mt-1 text-xs text-slate-500">Choose an emergency type or enter a custom one below.</p>
 
             <div className="mt-4">
-              <label className="block text-xs font-semibold text-slate-700 mb-2">Pre-Made Emergency Templates</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-2">Emergency Type</label>
               <div className="grid grid-cols-2 gap-2">
-                {EMERGENCY_TEMPLATES.map((tmpl) => (
+                {EMERGENCY_TYPES.map((tmpl) => (
                   <button
                     key={tmpl.type}
                     type="button"
-                    onClick={() => handleSelectTemplate(tmpl)}
+                    onClick={() => handleSelectEmergencyType(tmpl)}
                     className={`p-2.5 rounded-xl border text-left text-xs font-semibold transition ${
-                      selectedTemplate === tmpl.type && !customEmergencyType
+                      emergencyType === tmpl.type && !customEmergencyType
                         ? "border-red-500 bg-red-50 text-red-700 shadow-xs"
                         : "border-slate-200 hover:border-slate-300 text-slate-700"
                     }`}
