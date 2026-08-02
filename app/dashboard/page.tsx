@@ -24,6 +24,7 @@ export default function DashboardPage() {
   const [eventDesc, setEventDesc] = useState("");
   const [eventCategory, setEventCategory] = useState("Camp");
   const [maxCapacity, setMaxCapacity] = useState(20);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     const current = getCurrentUser();
@@ -50,8 +51,8 @@ export default function DashboardPage() {
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
+    setCreateError(null);
 
-    // Generate a simple 4-digit numerical code (e.g., 8492)
     const code = Math.floor(1000 + Math.random() * 9000).toString();
 
     const newEvent: EventData = {
@@ -69,13 +70,8 @@ export default function DashboardPage() {
       updatedAt: Date.now(),
     };
 
-    // Cache locally immediately before server POST to ensure millisecond 0 availability
-    if (typeof window !== "undefined") {
-      localStorage.setItem(`vega_cache_event_${code}`, JSON.stringify(newEvent));
-    }
-
     try {
-      await fetch("/api/event", {
+      const res = await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -87,8 +83,20 @@ export default function DashboardPage() {
           maxParticipants: newEvent.maxParticipants,
         }),
       });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        setCreateError((errData as { error?: string }).error || "Failed to create event on server. Please try again.");
+        return;
+      }
+
+      const saved: EventData = await res.json();
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`vega_cache_event_${code}`, JSON.stringify(saved));
+      }
     } catch {
-      /* ignore */
+      setCreateError("Network error. Could not save event to server.");
+      return;
     }
 
     addOrganizedEventToUser(code);
@@ -359,6 +367,12 @@ export default function DashboardPage() {
                 ✕
               </button>
             </div>
+
+            {createError && (
+              <div className="mb-4 rounded-xl bg-red-50 p-3.5 text-xs font-semibold text-red-700 ring-1 ring-red-200">
+                {createError}
+              </div>
+            )}
 
             <form onSubmit={handleCreateEvent} className="space-y-4">
               <div>

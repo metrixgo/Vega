@@ -1,68 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
-import os from "os";
 import type { EventData, Student, Status, Notice, CheckInRequest, ChatMessage } from "@/lib/types";
 import { getCaliforniaTime } from "@/lib/types";
 import { sendPushToEvent } from "@/lib/push-server";
-
-// Global in-memory cache for fast local access
-const globalEvents = globalThis as unknown as {
-  _vegaEvents?: Map<string, EventData>;
-  _vegaDiskLoaded?: boolean;
-};
-
-if (!globalEvents._vegaEvents) {
-  globalEvents._vegaEvents = new Map<string, EventData>();
-}
-
-const events = globalEvents._vegaEvents;
-
-function getStoragePath(): string {
-  try {
-    const dataDir = path.join(process.cwd(), "data");
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    return path.join(dataDir, "vega_events.json");
-  } catch {
-    return path.join(os.tmpdir(), "vega_events.json");
-  }
-}
-
-function loadDiskEvents(force = false) {
-  if (!force && globalEvents._vegaDiskLoaded) return;
-  try {
-    const filePath = getStoragePath();
-    events.clear();
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const parsed: Record<string, EventData> = JSON.parse(raw);
-      for (const [code, data] of Object.entries(parsed)) {
-        events.set(code, data);
-      }
-    }
-  } catch (err) {
-    console.error("Failed to load disk events:", err);
-  } finally {
-    globalEvents._vegaDiskLoaded = true;
-  }
-}
-
-function saveDiskEvents() {
-  try {
-    const filePath = getStoragePath();
-    const tempFile = `${filePath}.tmp`;
-    const obj: Record<string, EventData> = {};
-    for (const [code, data] of events.entries()) {
-      obj[code] = data;
-    }
-    fs.writeFileSync(tempFile, JSON.stringify(obj, null, 2), "utf-8");
-    fs.renameSync(tempFile, filePath);
-  } catch (err) {
-    console.error("Failed to save disk events:", err);
-  }
-}
+import { loadEvents, saveEvents, normalizeCode } from "@/lib/event-store";
 
 function findStudentIndex(students: Student[], query: { id?: number; phone?: string; name?: string }): number {
   if (query.id) {
@@ -126,9 +66,13 @@ function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMe
 }
 
 export async function GET(request: NextRequest) {
-  loadDiskEvents(true);
+  const events = await loadEvents(true);
   const { searchParams } = new URL(request.url);
-  const code = (searchParams.get("code") || "8492").toString().trim().toUpperCase();
+  const code = normalizeCode(searchParams.get("code") || "");
+
+  if (!code) {
+    return NextResponse.json({ error: "Event code is required." }, { status: 400 });
+  }
 
   const event = events.get(code);
 
@@ -144,7 +88,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  loadDiskEvents(true);
+  const events = await loadEvents(true);
   try {
     const body = await request.json();
     const {
@@ -170,7 +114,7 @@ export async function POST(request: NextRequest) {
       eventData,
     } = body;
 
-    const code = (rawCode || "8492").toString().trim().toUpperCase();
+    const code = normalizeCode(rawCode || "");
     let event: EventData | null | undefined = events.get(code);
 
     // Action: RESTORE
@@ -191,13 +135,16 @@ export async function POST(request: NextRequest) {
           updatedAt: Date.now(),
         };
         events.set(code, event);
-        saveDiskEvents();
+        await saveEvents(events);
       }
       return NextResponse.json(event);
     }
 
     // Action: CREATE
     if (action === "create") {
+      if (!code) {
+        return NextResponse.json({ error: "Event code is required." }, { status: 400 });
+      }
       event = {
         code,
         name: eventName || "Group Safety Event",
@@ -213,7 +160,7 @@ export async function POST(request: NextRequest) {
         updatedAt: Date.now(),
       };
       events.set(code, event);
-      saveDiskEvents();
+      await saveEvents(events);
       return NextResponse.json(event);
     }
 
@@ -405,12 +352,12 @@ export async function POST(request: NextRequest) {
       event.emergency = null;
       event.checkInRequest = null;
       events.set(code, event);
-      saveDiskEvents();
+      await saveEvents(events);
       return NextResponse.json({ success: true, deleted: true, code });
     }
 
     events.set(code, event);
-    saveDiskEvents();
+    await saveEvents(events);
 
     return NextResponse.json(event);
   } catch (error) {
