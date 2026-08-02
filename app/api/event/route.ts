@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { normalizeEventCode, isValidEventCode } from "@/lib/event-codes";
+import type { EventData, Student, Status, Notice, CheckInRequest, ChatMessage } from "@/lib/types";
 import { sendPushToEvent } from "@/lib/push-server";
-import type { EventData, Student, Notice, CheckInRequest } from "@/lib/types";
 
+// Global in-memory cache for fast local access
 const globalEvents = globalThis as unknown as {
   _vegaEvents?: Map<string, EventData>;
   _vegaDiskLoaded?: boolean;
@@ -16,16 +16,6 @@ if (!globalEvents._vegaEvents) {
 }
 
 const events = globalEvents._vegaEvents;
-
-/** Only the explicit delete action may mark an event as deleted. */
-const PARTICIPANT_ACTIONS = new Set([
-  "join",
-  "leave",
-  "update_status",
-  "update_location",
-  "confirm_check_in",
-  "dismiss_emergency",
-]);
 
 function getStoragePath(): string {
   try {
@@ -47,8 +37,7 @@ function loadDiskEvents() {
       const raw = fs.readFileSync(filePath, "utf-8");
       const parsed: Record<string, EventData> = JSON.parse(raw);
       for (const [code, data] of Object.entries(parsed)) {
-        const normalized = normalizeEventCode(code);
-        events.set(normalized, { ...data, code: normalized });
+        events.set(code, data);
       }
     }
   } catch (err) {
@@ -69,17 +58,6 @@ function saveDiskEvents() {
   } catch (err) {
     console.error("Failed to save disk events:", err);
   }
-}
-
-function generateUniqueCode(): string {
-  let attempts = 0;
-  while (attempts < 100) {
-    const code = String(Math.floor(1000 + Math.random() * 9000));
-    const existing = events.get(code);
-    if (!existing || existing.deleted) return code;
-    attempts++;
-  }
-  return String(Date.now()).slice(-4);
 }
 
 function findStudentIndex(students: Student[], query: { id?: number; phone?: string; name?: string }): number {
@@ -130,20 +108,12 @@ function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
 export async function GET(request: NextRequest) {
   loadDiskEvents();
   const { searchParams } = new URL(request.url);
-  const code = normalizeEventCode(searchParams.get("code") || "");
-
-  if (!code || !isValidEventCode(code)) {
-    return NextResponse.json({ error: "Invalid event code format." }, { status: 400 });
-  }
+  const code = (searchParams.get("code") || "VEGA-MAIN").toUpperCase();
 
   const event = events.get(code);
 
-  if (!event) {
-    return NextResponse.json({ error: "Event code does not exist.", exists: false }, { status: 404 });
-  }
-
-  if (event.deleted) {
-    return NextResponse.json({ error: "Event has been deleted.", deleted: true }, { status: 404 });
+  if (!event || event.deleted) {
+    return NextResponse.json({ error: "Event code does not exist.", deleted: true }, { status: 404 });
   }
 
   return NextResponse.json(event);
@@ -170,31 +140,27 @@ export async function POST(request: NextRequest) {
       text,
       checkInTitle,
       scheduledTime,
+      senderId,
+      senderName,
+      recipientId,
       eventData,
     } = body;
 
-    const code = normalizeEventCode(rawCode || "");
+    const code = (rawCode || "VEGA-MAIN").toUpperCase();
     let event: EventData | null | undefined = events.get(code);
 
-    // Participant actions must never delete an event
-    if (PARTICIPANT_ACTIONS.has(action) && event?.deleted) {
-      return NextResponse.json({ error: "Event has been deleted.", deleted: true }, { status: 404 });
-    }
-
-    // Action: RESTORE (organizer-only recovery — never restore deleted events)
+    // Action: RESTORE
     if (action === "restore" && eventData) {
-      if (event?.deleted) {
-        return NextResponse.json({ error: "Event has been deleted.", deleted: true }, { status: 404 });
-      }
-      if (!eventData.deleted && !event) {
+      if (!event || !event.deleted) {
         event = {
           code,
           name: eventData.name || "Group Safety Event",
           description: eventData.description || "",
           category: eventData.category || "General",
           maxParticipants: eventData.maxParticipants || 20,
-          students: mergeStudents([], eventData.students || []),
+          students: mergeStudents(event?.students || [], eventData.students || []),
           notices: eventData.notices || [],
+          messages: eventData.messages || [],
           emergency: eventData.emergency || null,
           checkInRequest: eventData.checkInRequest || null,
           deleted: false,
@@ -203,39 +169,37 @@ export async function POST(request: NextRequest) {
         events.set(code, event);
         saveDiskEvents();
       }
-      return NextResponse.json(event || { error: "Nothing to restore" });
+      return NextResponse.json(event);
     }
 
     // Action: CREATE
     if (action === "create") {
-      const newCode = code && isValidEventCode(code) ? code : generateUniqueCode();
-      if (events.get(newCode) && !events.get(newCode)?.deleted) {
-        return NextResponse.json({ error: "Event code already in use. Please try again." }, { status: 409 });
-      }
-
       event = {
-        code: newCode,
+        code,
         name: eventName || "Group Safety Event",
         description: eventDesc || "",
         category: eventCat || "General",
         maxParticipants: typeof eventMax === "number" ? eventMax : 20,
         students: [],
         notices: [],
+        messages: [],
         emergency: null,
         checkInRequest: null,
         deleted: false,
         updatedAt: Date.now(),
       };
-      events.set(newCode, event);
+      events.set(code, event);
       saveDiskEvents();
       return NextResponse.json(event);
     }
 
+    // Check if event is valid / deleted
     if (!event || event.deleted) {
-      return NextResponse.json({ error: "Invalid Event Code. Event does not exist.", deleted: !!event?.deleted }, { status: 404 });
+      return NextResponse.json({ error: "Invalid Event Code. Event does not exist.", deleted: true }, { status: 404 });
     }
 
     event.updatedAt = Date.now();
+    if (!event.messages) event.messages = [];
 
     const targetName = name || studentName || "";
     const targetPhone = phone || "";
@@ -275,6 +239,32 @@ export async function POST(request: NextRequest) {
       const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
       if (idx >= 0) {
         event.students.splice(idx, 1);
+      }
+    } else if (action === "send_message") {
+      if (text && senderId && recipientId) {
+        const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        const newMsg: ChatMessage = {
+          id: Date.now(),
+          senderId: String(senderId),
+          senderName: senderName || "User",
+          recipientId: String(recipientId),
+          text: text.trim(),
+          time: timeStr,
+          read: false,
+        };
+        event.messages.push(newMsg);
+
+        // Send 24/7 background push notification to recipient
+        sendPushToEvent(code, {
+          title: `💬 Private Message from ${newMsg.senderName}`,
+          body: newMsg.text,
+          url: recipientId === "organizer" ? `/organizer/event/${code}` : `/participant/event/${code}`,
+          tag: `chat-${newMsg.senderId}`,
+        }).catch(() => {});
+      }
+    } else if (action === "mark_messages_read") {
+      if (recipientId && event.messages) {
+        event.messages = event.messages.map((m) => (m.recipientId === String(recipientId) ? { ...m, read: true } : m));
       }
     } else if (action === "update_status") {
       const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
@@ -345,26 +335,32 @@ export async function POST(request: NextRequest) {
         const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
         event.notices.unshift({ id: Date.now(), text, time: timeStr });
 
+        // Send 24/7 background push notification to all participants
         sendPushToEvent(code, {
-          title: "📢 Announcement from Organizer",
+          title: `📢 Announcement from Organizer`,
           body: text,
           url: `/participant/event/${code}`,
-          tag: `announcement-${code}`,
-        }).catch((err) => console.error("Push send error:", err));
+          tag: `notice-${Date.now()}`,
+        }).catch(() => {});
       }
     } else if (action === "emergency") {
       event.emergency = text || null;
-    } else if (action === "dismiss_emergency") {
-      // Participant-only: mark themselves safe without clearing the global emergency
+      if (text) {
+        sendPushToEvent(code, {
+          title: `🚨 EMERGENCY ALERT - TAKE ACTION`,
+          body: text,
+          url: `/participant/event/${code}`,
+          tag: `emergency-${Date.now()}`,
+        }).catch(() => {});
+      }
+    } else if (action === "clear_emergency") {
+      event.emergency = null;
       const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
       if (idx >= 0) {
         event.students[idx].status = "Safe";
         event.students[idx].issue = undefined;
         event.students[idx].lastSeen = "Just now";
       }
-    } else if (action === "clear_emergency") {
-      // Organizer-only: clears the global emergency alert for all participants
-      event.emergency = null;
     } else if (action === "mark_safe") {
       const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
       if (idx >= 0) {
@@ -376,22 +372,19 @@ export async function POST(request: NextRequest) {
     } else if (action === "reset") {
       event.students = [];
       event.notices = [];
+      event.messages = [];
       event.emergency = null;
       event.checkInRequest = null;
     } else if (action === "delete") {
       event.deleted = true;
       event.students = [];
       event.notices = [];
+      event.messages = [];
       event.emergency = null;
       event.checkInRequest = null;
       events.set(code, event);
       saveDiskEvents();
       return NextResponse.json({ success: true, deleted: true, code });
-    }
-
-    // Safety guard: participant actions must never leave the event in a deleted state
-    if (PARTICIPANT_ACTIONS.has(action)) {
-      event.deleted = false;
     }
 
     events.set(code, event);

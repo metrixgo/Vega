@@ -3,10 +3,10 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentUser, removeJoinedEventFromUser } from "@/lib/auth";
 import { isNotificationGranted, requestNotificationPermission, triggerNotification } from "@/lib/notifications";
-import type { Status, Notice, CheckInRequest, EventData } from "@/lib/types";
+import type { Status, Notice, CheckInRequest, EventData, ChatMessage } from "@/lib/types";
 
 const tone: Record<Status, string> = {
   Safe: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -41,7 +41,9 @@ export default function ParticipantEventPage() {
   const [eventData, setEventData] = useState<EventData | null>(null);
   const [status, setStatus] = useState<Status>("Unchecked");
   const [notices, setNotices] = useState<Notice[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [checkInReq, setCheckInReq] = useState<CheckInRequest | null>(null);
+  const [hasConfirmedCheckIn, setHasConfirmedCheckIn] = useState(false);
 
   const [activeEmergency, setActiveEmergency] = useState<string | null>(null);
   const [dismissedEmergencyText, setDismissedEmergencyText] = useState<string | null>(null);
@@ -50,9 +52,14 @@ export default function ParticipantEventPage() {
   const [report, setReport] = useState<string | null>(null);
   const [notifGranted, setNotifGranted] = useState(false);
 
+  // Private Chat State
+  const [showChatModal, setShowChatModal] = useState(false);
+  const [chatInputText, setChatInputText] = useState("");
+
   const prevNoticeCountRef = useRef<number>(0);
   const prevEmergencyRef = useRef<string | null>(null);
   const prevCheckInIdRef = useRef<number | null>(null);
+  const prevMessageCountRef = useRef<number>(0);
 
   // Require Authentication Lock & Auto-Request Push Permission
   useEffect(() => {
@@ -69,7 +76,7 @@ export default function ParticipantEventPage() {
     const granted = await requestNotificationPermission();
     setNotifGranted(granted);
     if (granted) {
-      triggerNotification("Notifications Enabled", { body: "You will receive popups for announcements & emergency alerts." }, "notice");
+      triggerNotification("Notifications Enabled", { body: "You will receive popups for announcements, alerts & messages." }, "notice");
     }
   };
 
@@ -107,6 +114,7 @@ export default function ParticipantEventPage() {
                   const restored: EventData = await restoreRes.json();
                   setEventData(restored);
                   setNotices(restored.notices || []);
+                  setMessages(restored.messages || []);
                   setCheckInReq(restored.checkInRequest || null);
                   return;
                 }
@@ -130,7 +138,14 @@ export default function ParticipantEventPage() {
         if (isSubscribed) {
           setEventData(data);
           const currentNotices: Notice[] = data.notices || [];
+          const currentMsgs: ChatMessage[] = data.messages || [];
           setNotices(currentNotices);
+          setMessages(currentMsgs);
+
+          // Handle Check-In Banner visibility
+          if (data.checkInRequest && data.checkInRequest.id !== prevCheckInIdRef.current) {
+            setHasConfirmedCheckIn(false);
+          }
           setCheckInReq(data.checkInRequest || null);
 
           // Save to local cache
@@ -154,6 +169,7 @@ export default function ParticipantEventPage() {
           if (me) {
             setStatus(me.status);
             setStudentId(me.id);
+            if (me.checkedInAt) setHasConfirmedCheckIn(true);
           }
 
           // Native Popup Notification for Check-In Request
@@ -162,18 +178,30 @@ export default function ParticipantEventPage() {
             prevCheckInIdRef.current = data.checkInRequest.id;
           }
 
-          // Native System-Level Background Push Notification for New Announcements
+          // Native Popup Notification for New Announcements
           if (currentNotices.length > prevNoticeCountRef.current && prevNoticeCountRef.current > 0) {
             const latest = currentNotices[0];
             triggerNotification("📢 Announcement from Organizer", { body: latest.text }, "notice");
           }
           prevNoticeCountRef.current = currentNotices.length;
 
-          // Native System-Level Background Push Notification for Emergency Alert
+          // Native Popup Notification for Emergency Alert
           if (serverEmergency && serverEmergency !== prevEmergencyRef.current && serverEmergency !== dismissedEmergencyText) {
             triggerNotification("🚨 EMERGENCY ALERT - TAKE ACTION", { body: serverEmergency }, "emergency");
           }
           prevEmergencyRef.current = serverEmergency;
+
+          // Check for incoming private messages from Organizer
+          const incomingOrgMsgs = currentMsgs.filter(
+            (m) =>
+              m.senderId === "organizer" &&
+              (studentId ? m.recipientId === String(studentId) : m.recipientId === name || m.recipientId === phone)
+          );
+          if (incomingOrgMsgs.length > prevMessageCountRef.current && prevMessageCountRef.current > 0) {
+            const latest = incomingOrgMsgs[incomingOrgMsgs.length - 1];
+            triggerNotification("💬 Private Message from Organizer", { body: latest.text }, "notice");
+          }
+          prevMessageCountRef.current = incomingOrgMsgs.length;
         }
       } catch (err) {
         console.error("Poll error:", err);
@@ -197,7 +225,24 @@ export default function ParticipantEventPage() {
         document.removeEventListener("visibilitychange", handleVis);
       }
     };
-  }, [code, name, phone, dismissedEmergencyText, router]);
+  }, [code, name, phone, dismissedEmergencyText, studentId, router]);
+
+  const participantMessages = useMemo(() => {
+    return messages.filter(
+      (m) =>
+        (m.senderId === "organizer" && (studentId ? m.recipientId === String(studentId) : m.recipientId === name || m.recipientId === phone)) ||
+        (m.recipientId === "organizer" && (studentId ? m.senderId === String(studentId) : m.senderId === name || m.senderId === phone))
+    );
+  }, [messages, studentId, name, phone]);
+
+  const unreadCount = useMemo(() => {
+    return messages.filter(
+      (m) =>
+        !m.read &&
+        m.senderId === "organizer" &&
+        (studentId ? m.recipientId === String(studentId) : m.recipientId === name || m.recipientId === phone)
+    ).length;
+  }, [messages, studentId, name, phone]);
 
   const handleLocate = () => {
     if (typeof window === "undefined" || !navigator.geolocation) {
@@ -239,6 +284,7 @@ export default function ParticipantEventPage() {
 
   const handleConfirmCheckIn = async () => {
     setStatus("Safe");
+    setHasConfirmedCheckIn(true); // Hides Check-In Banner immediately
     try {
       await fetch("/api/event", {
         method: "POST",
@@ -253,35 +299,68 @@ export default function ParticipantEventPage() {
   const handleNeedHelp = (issue: string) => {
     setReport(issue);
     handleUpdateStatus("Needs help", issue);
+    setShowChatModal(true); // Open private chat with organizer immediately
   };
 
-  // Atomic Clear Emergency (Fixes Race Condition Bug)
-  const handleClearEmergency = async () => {
+  // Atomic Clear Emergency (Fixes Race Condition Bug & Adds Dual Options)
+  const handleClearEmergency = async (responseOption: "safe" | "help") => {
     if (activeEmergency) {
       setDismissedEmergencyText(activeEmergency);
     }
     setActiveEmergency(null);
-    setStatus("Safe");
+
+    if (responseOption === "safe") {
+      setStatus("Safe");
+      try {
+        await fetch("/api/event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "clear_emergency",
+            code,
+            studentId,
+            studentName: name,
+            phone,
+            status: "Safe",
+          }),
+        });
+      } catch {
+        /* ignore */
+      }
+    } else {
+      // Participant tapped "I NEED HELP"
+      setStatus("Needs help");
+      handleNeedHelp("Emergency Alert Assistance Needed");
+    }
+  };
+
+  const handleSendPrivateMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInputText.trim()) return;
 
     try {
-      await fetch("/api/event", {
+      const res = await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "clear_emergency",
+          action: "send_message",
           code,
-          studentId,
-          studentName: name,
-          phone,
-          status: "Safe",
+          senderId: String(studentId || name),
+          senderName: name,
+          recipientId: "organizer",
+          text: chatInputText.trim(),
         }),
       });
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data.messages || []);
+        setChatInputText("");
+      }
     } catch {
       /* ignore */
     }
   };
 
-  // Safe Leave Event (Fixes Ghost Deletion Bug)
   const handleLeaveEvent = async () => {
     if (!confirm("Are you sure you want to leave this event session?")) return;
 
@@ -331,11 +410,24 @@ export default function ParticipantEventPage() {
             <p className="text-sm text-slate-500">Hello, {name.split(" ")[0]}</p>
             <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">Your Safety Check-In</h1>
           </div>
-          <Badge status={status} />
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowChatModal(true)}
+              className="relative secondary font-semibold text-xs py-2 px-3 flex items-center gap-1.5"
+            >
+              💬 Private Chat
+              {unreadCount > 0 && (
+                <span className="grid h-4 w-4 place-items-center rounded-full bg-blue-600 text-[10px] font-bold text-white">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+            <Badge status={status} />
+          </div>
         </div>
 
-        {/* Check-In Request Banner */}
-        {checkInReq && checkInReq.active && (
+        {/* Check-In Request Banner (Disappears after confirming) */}
+        {checkInReq && checkInReq.active && !hasConfirmedCheckIn && (
           <section className="mt-6 rounded-2xl bg-emerald-600 text-white p-6 shadow-md border border-emerald-500 animate-pulse">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div>
@@ -391,7 +483,7 @@ export default function ParticipantEventPage() {
         {/* Need Help Emergency Options */}
         <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm border border-slate-200">
           <h2 className="font-semibold text-slate-900">Need Assistance?</h2>
-          <p className="text-xs text-slate-400 mt-1">Tap a category below to immediately alert your organizer</p>
+          <p className="text-xs text-slate-400 mt-1">Tap a category below to immediately alert your organizer & open private chat</p>
           <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {["Fire", "Injury", "Lost", "Hazard"].map((issue) => (
               <button
@@ -426,19 +518,82 @@ export default function ParticipantEventPage() {
         </section>
       </div>
 
-      {/* Emergency Full-Screen Red Alert Modal */}
+      {/* Private 1-on-1 Chat Modal */}
+      {showChatModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl flex flex-col h-[520px]">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+              <div>
+                <h2 className="font-bold text-slate-900 text-lg">Private Chat with Organizer</h2>
+                <p className="text-xs text-slate-500">Direct 1-on-1 confidential messages</p>
+              </div>
+              <button onClick={() => setShowChatModal(false)} className="text-slate-400 hover:text-slate-600 text-lg font-bold">
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto py-4 space-y-3">
+              {participantMessages.length === 0 ? (
+                <div className="text-center py-10 text-xs text-slate-400">
+                  No private messages yet. Send a message to your event organizer below.
+                </div>
+              ) : (
+                participantMessages.map((msg) => {
+                  const isMe = msg.senderId !== "organizer";
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                      <div
+                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
+                          isMe ? "bg-slate-900 text-white rounded-br-none" : "bg-slate-100 text-slate-800 rounded-bl-none"
+                        }`}
+                      >
+                        <p>{msg.text}</p>
+                      </div>
+                      <span className="text-[10px] text-slate-400 mt-1 px-1">{msg.time}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <form onSubmit={handleSendPrivateMessage} className="pt-3 border-t border-slate-100 flex gap-2">
+              <input
+                type="text"
+                value={chatInputText}
+                onChange={(e) => setChatInputText(e.target.value)}
+                placeholder="Message event organizer…"
+                className="field flex-1 text-sm"
+              />
+              <button type="submit" className="primary px-4 py-2 text-sm font-semibold">
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Emergency Full-Screen Red Alert Modal (With Dual Response Options) */}
       {activeEmergency && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-red-600 p-5 text-center text-white animate-fade-in">
-          <div className="max-w-lg">
+          <div className="max-w-lg w-full">
             <p className="text-sm font-extrabold uppercase tracking-[.2em] text-red-100">HIGH PRIORITY EMERGENCY</p>
             <h2 className="mt-3 text-3xl sm:text-4xl font-extrabold tracking-tight">TAKE ACTION NOW</h2>
             <p className="mt-5 text-lg leading-8 text-red-50 font-medium">{activeEmergency}</p>
-            <button
-              onClick={handleClearEmergency}
-              className="mt-10 w-full rounded-xl bg-white px-6 py-4 font-bold text-red-700 shadow-xl min-h-[56px] text-lg active:scale-95 transition"
-            >
-              I AM SAFE
-            </button>
+
+            <div className="mt-10 flex flex-col sm:flex-row gap-4">
+              <button
+                onClick={() => handleClearEmergency("safe")}
+                className="flex-1 rounded-xl bg-white px-6 py-4 font-bold text-emerald-700 shadow-xl min-h-[56px] text-lg active:scale-95 transition"
+              >
+                I AM SAFE
+              </button>
+              <button
+                onClick={() => handleClearEmergency("help")}
+                className="flex-1 rounded-xl bg-slate-900 px-6 py-4 font-bold text-white shadow-xl min-h-[56px] text-lg active:scale-95 transition"
+              >
+                I NEED HELP
+              </button>
+            </div>
           </div>
         </div>
       )}

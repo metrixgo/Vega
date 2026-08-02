@@ -25,6 +25,16 @@ export type CheckInRequest = {
   active: boolean;
 };
 
+export type ChatMessage = {
+  id: number;
+  senderId: string; // "organizer" or student name/phone/id
+  senderName: string;
+  recipientId: string; // "organizer" or student name/phone/id
+  text: string;
+  time: string;
+  read: boolean;
+};
+
 export type EventData = {
   code: string;
   name?: string;
@@ -33,6 +43,7 @@ export type EventData = {
   maxParticipants?: number;
   students: Student[];
   notices: Notice[];
+  messages?: ChatMessage[];
   emergency: string | null;
   checkInRequest?: CheckInRequest | null;
   deleted?: boolean;

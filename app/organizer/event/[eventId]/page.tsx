@@ -7,7 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentUser, removeOrganizedEventFromUser } from "@/lib/auth";
 import { isNotificationGranted, requestNotificationPermission, triggerNotification } from "@/lib/notifications";
-import type { Status, Student, Notice, CheckInRequest, EventData } from "@/lib/types";
+import type { Status, Student, Notice, CheckInRequest, EventData, ChatMessage } from "@/lib/types";
 
 const EventMap = dynamic(() => import("@/app/map"), {
   ssr: false,
@@ -38,6 +38,7 @@ export default function OrganizerEventPage() {
   const [eventData, setEventData] = useState<EventData | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [checkInReq, setCheckInReq] = useState<CheckInRequest | null>(null);
 
   const [query, setQuery] = useState("");
@@ -48,6 +49,10 @@ export default function OrganizerEventPage() {
   const [alertText, setAlertText] = useState("Please go calmly to the designated assembly point.");
   const [showAlertModal, setShowAlertModal] = useState(false);
 
+  // Private Chat State
+  const [chatInputText, setChatInputText] = useState("");
+  const [showChatModal, setShowChatModal] = useState(false);
+
   // Check-In Modal State
   const [showCheckInModal, setShowCheckInModal] = useState(false);
   const [checkInTitle, setCheckInTitle] = useState("Instant Safety Check-In");
@@ -55,6 +60,7 @@ export default function OrganizerEventPage() {
 
   const [notifGranted, setNotifGranted] = useState(false);
   const prevHelpStudentsRef = useRef<Set<number>>(new Set());
+  const prevMessageCountRef = useRef<number>(0);
 
   // Require Authentication Lock & Auto-Request Notifications
   useEffect(() => {
@@ -70,11 +76,11 @@ export default function OrganizerEventPage() {
     const granted = await requestNotificationPermission();
     setNotifGranted(granted);
     if (granted) {
-      triggerNotification("Notifications Enabled", { body: "You will receive popups when participants request help." }, "notice");
+      triggerNotification("Notifications Enabled", { body: "You will receive popups when participants request help or send messages." }, "notice");
     }
   };
 
-  // Poll server for live event data with Client LocalStorage Auto-Rehydration
+  // Poll server for live event data
   useEffect(() => {
     let isSubscribed = true;
 
@@ -111,6 +117,7 @@ export default function OrganizerEventPage() {
                   setEventData(restored);
                   setStudents(restored.students || []);
                   setNotices(restored.notices || []);
+                  setMessages(restored.messages || []);
                   setCheckInReq(restored.checkInRequest || null);
                   return;
                 }
@@ -126,8 +133,10 @@ export default function OrganizerEventPage() {
         if (isSubscribed) {
           setEventData(data);
           const currentStudents: Student[] = data.students || [];
+          const currentMsgs: ChatMessage[] = data.messages || [];
           setStudents(currentStudents);
           setNotices(data.notices || []);
+          setMessages(currentMsgs);
           setCheckInReq(data.checkInRequest || null);
 
           // Save to local cache
@@ -147,6 +156,14 @@ export default function OrganizerEventPage() {
             }
           });
           prevHelpStudentsRef.current = new Set(helpStudents.map((s) => s.id));
+
+          // Check for new incoming private messages for organizer
+          const incomingOrgMsgs = currentMsgs.filter((m) => m.recipientId === "organizer");
+          if (incomingOrgMsgs.length > prevMessageCountRef.current && prevMessageCountRef.current > 0) {
+            const latest = incomingOrgMsgs[incomingOrgMsgs.length - 1];
+            triggerNotification(`💬 Private Message from ${latest.senderName}`, { body: latest.text }, "notice");
+          }
+          prevMessageCountRef.current = incomingOrgMsgs.length;
         }
       } catch (err) {
         console.error("Poll error:", err);
@@ -174,6 +191,15 @@ export default function OrganizerEventPage() {
 
   const selected = useMemo(() => students.find((s) => s.id === selectedId) || students[0] || null, [students, selectedId]);
 
+  const selectedChatMessages = useMemo(() => {
+    if (!selected) return [];
+    return messages.filter(
+      (m) =>
+        (m.senderId === String(selected.id) || m.senderId === selected.name || m.senderId === selected.phone) ||
+        (m.recipientId === String(selected.id) || m.recipientId === selected.name || m.recipientId === selected.phone)
+    );
+  }, [messages, selected]);
+
   const visible = useMemo(
     () => students.filter((student) => (filter === "All" || student.status === filter) && student.name.toLowerCase().includes(query.toLowerCase())),
     [students, query, filter]
@@ -181,6 +207,15 @@ export default function OrganizerEventPage() {
 
   const count = (status: Status) => students.filter((student) => student.status === status).length;
   const checkedInCount = useMemo(() => students.filter((s) => s.checkedInAt && s.status === "Safe").length, [students]);
+
+  const unreadMessageCount = (student: Student) => {
+    return messages.filter(
+      (m) =>
+        !m.read &&
+        m.recipientId === "organizer" &&
+        (m.senderId === String(student.id) || m.senderId === student.name || m.senderId === student.phone)
+    ).length;
+  };
 
   const handleSendNotice = async () => {
     if (!noticeText.trim()) return;
@@ -195,6 +230,33 @@ export default function OrganizerEventPage() {
         setNotices(data.notices || []);
         triggerNotification("📢 Announcement Broadcasted", { body: noticeText.trim() }, "notice");
         setNoticeText("");
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleSendPrivateMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInputText.trim() || !selected) return;
+
+    try {
+      const res = await fetch("/api/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "send_message",
+          code,
+          senderId: "organizer",
+          senderName: "Organizer",
+          recipientId: String(selected.id),
+          text: chatInputText.trim(),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data.messages || []);
+        setChatInputText("");
       }
     } catch {
       /* ignore */
@@ -419,29 +481,40 @@ export default function OrganizerEventPage() {
                   )}
                 </div>
               ) : (
-                visible.map((student) => (
-                  <button
-                    key={student.id}
-                    onClick={() => setSelectedId(student.id)}
-                    className={`flex w-full items-center gap-3 border-b border-slate-100 px-5 py-4 text-left ${
-                      selected?.id === student.id ? "bg-slate-50" : "hover:bg-slate-50"
-                    }`}
-                  >
-                    <div className="grid h-10 w-10 place-items-center rounded-full bg-slate-200 text-sm font-semibold text-slate-700">
-                      {student.name
-                        .split(" ")
-                        .map((part) => part[0])
-                        .join("")}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-slate-900">{student.name}</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {student.checkedInAt ? `Checked in at ${student.checkedInAt}` : `Seen ${student.lastSeen}`}
-                      </p>
-                    </div>
-                    <Badge status={student.status} />
-                  </button>
-                ))
+                visible.map((student) => {
+                  const unread = unreadMessageCount(student);
+                  return (
+                    <button
+                      key={student.id}
+                      onClick={() => {
+                        setSelectedId(student.id);
+                        setShowChatModal(true);
+                      }}
+                      className={`flex w-full items-center gap-3 border-b border-slate-100 px-5 py-4 text-left ${
+                        selected?.id === student.id ? "bg-slate-50" : "hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="relative grid h-10 w-10 place-items-center rounded-full bg-slate-200 text-sm font-semibold text-slate-700">
+                        {student.name
+                          .split(" ")
+                          .map((part) => part[0])
+                          .join("")}
+                        {unread > 0 && (
+                          <span className="absolute -top-1 -right-1 grid h-4 w-4 place-items-center rounded-full bg-blue-600 text-[10px] font-bold text-white">
+                            {unread}
+                          </span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-900">{student.name}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {student.checkedInAt ? `Checked in at ${student.checkedInAt}` : `Seen ${student.lastSeen}`}
+                        </p>
+                      </div>
+                      <Badge status={student.status} />
+                    </button>
+                  );
+                })
               )}
             </div>
           </section>
@@ -459,39 +532,50 @@ export default function OrganizerEventPage() {
             </div>
 
             {selected ? (
-              <aside className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Selected Participant</p>
-                <h2 className="mt-2 text-xl font-bold text-slate-900">{selected.name}</h2>
-                <div className="mt-3">
-                  <Badge status={selected.status} />
-                </div>
-                <div className="mt-5 space-y-3 border-y border-slate-100 py-4 text-sm">
-                  <p>
-                    <span className="block text-xs text-slate-400">Phone Contact</span>
-                    <span className="font-medium text-slate-800">{selected.phone || "Not provided"}</span>
-                  </p>
-                  <p>
-                    <span className="block text-xs text-slate-400">GPS Coordinates</span>
-                    <span className="font-mono text-xs text-slate-600">
-                      {selected.location[0].toFixed(4)}, {selected.location[1].toFixed(4)}
-                    </span>
-                  </p>
-                  {selected.checkedInAt && (
+              <aside className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200 flex flex-col justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Selected Participant</p>
+                  <h2 className="mt-2 text-xl font-bold text-slate-900">{selected.name}</h2>
+                  <div className="mt-3">
+                    <Badge status={selected.status} />
+                  </div>
+                  <div className="mt-5 space-y-3 border-y border-slate-100 py-4 text-sm">
                     <p>
-                      <span className="block text-xs text-slate-400">Check-In Confirmation</span>
-                      <span className="font-medium text-emerald-600">{selected.checkedInAt}</span>
+                      <span className="block text-xs text-slate-400">Phone Contact</span>
+                      <span className="font-medium text-slate-800">{selected.phone || "Not provided"}</span>
                     </p>
-                  )}
-                  {selected.issue && (
                     <p>
-                      <span className="block text-xs text-slate-400">Reported Issue</span>
-                      <span className="font-bold text-red-600">{selected.issue}</span>
+                      <span className="block text-xs text-slate-400">GPS Coordinates</span>
+                      <span className="font-mono text-xs text-slate-600">
+                        {selected.location[0].toFixed(4)}, {selected.location[1].toFixed(4)}
+                      </span>
                     </p>
-                  )}
+                    {selected.checkedInAt && (
+                      <p>
+                        <span className="block text-xs text-slate-400">Check-In Confirmation</span>
+                        <span className="font-medium text-emerald-600">{selected.checkedInAt}</span>
+                      </p>
+                    )}
+                    {selected.issue && (
+                      <p>
+                        <span className="block text-xs text-slate-400">Reported Issue</span>
+                        <span className="font-bold text-red-600">{selected.issue}</span>
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <button onClick={() => handleMarkSafe(selected.id)} className="secondary mt-5 w-full font-semibold">
-                  Mark Safe
-                </button>
+
+                <div className="mt-4 space-y-2">
+                  <button
+                    onClick={() => setShowChatModal(true)}
+                    className="primary w-full text-xs font-semibold py-2.5 flex items-center justify-center gap-1.5"
+                  >
+                    💬 Private Chat with {selected.name.split(" ")[0]}
+                  </button>
+                  <button onClick={() => handleMarkSafe(selected.id)} className="secondary w-full text-xs font-semibold py-2">
+                    Mark Safe
+                  </button>
+                </div>
               </aside>
             ) : (
               <aside className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200 grid place-items-center text-center">
@@ -534,6 +618,60 @@ export default function OrganizerEventPage() {
           </div>
         </section>
       </div>
+
+      {/* Private 1-on-1 Chat Modal */}
+      {showChatModal && selected && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl flex flex-col h-[520px]">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+              <div>
+                <h2 className="font-bold text-slate-900 text-lg">Private Chat: {selected.name}</h2>
+                <p className="text-xs text-slate-500">Direct 1-on-1 messaging with participant</p>
+              </div>
+              <button onClick={() => setShowChatModal(false)} className="text-slate-400 hover:text-slate-600 text-lg font-bold">
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto py-4 space-y-3">
+              {selectedChatMessages.length === 0 ? (
+                <div className="text-center py-10 text-xs text-slate-400">
+                  No private messages yet. Type a message below to start chatting.
+                </div>
+              ) : (
+                selectedChatMessages.map((msg) => {
+                  const isMe = msg.senderId === "organizer";
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                      <div
+                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
+                          isMe ? "bg-slate-900 text-white rounded-br-none" : "bg-slate-100 text-slate-800 rounded-bl-none"
+                        }`}
+                      >
+                        <p>{msg.text}</p>
+                      </div>
+                      <span className="text-[10px] text-slate-400 mt-1 px-1">{msg.time}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <form onSubmit={handleSendPrivateMessage} className="pt-3 border-t border-slate-100 flex gap-2">
+              <input
+                type="text"
+                value={chatInputText}
+                onChange={(e) => setChatInputText(e.target.value)}
+                placeholder={`Message ${selected.name.split(" ")[0]}…`}
+                className="field flex-1 text-sm"
+              />
+              <button type="submit" className="primary px-4 py-2 text-sm font-semibold">
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Check-In Request Modal */}
       {showCheckInModal && (
