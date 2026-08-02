@@ -6,10 +6,8 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentUser, removeOrganizedEventFromUser } from "@/lib/auth";
-import { getGeminiApiKey, setGeminiApiKey } from "@/lib/gemini-settings";
 import { isNotificationGranted, requestNotificationPermission, triggerNotification } from "@/lib/notifications";
 import type { Status, Student, Notice, CheckInRequest, EventData, ChatMessage } from "@/lib/types";
-import AiAssistant from "@/app/organizer/AiAssistant";
 
 const EventMap = dynamic(() => import("@/app/map"), {
   ssr: false,
@@ -86,9 +84,7 @@ export default function OrganizerEventPage() {
   const [showCheckInModal, setShowCheckInModal] = useState(false);
   const [checkInTitle, setCheckInTitle] = useState("Instant Safety Check-In");
   const [scheduledTime, setScheduledTime] = useState("");
-  const [showAiAssistant, setShowAiAssistant] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState("");
+  const [banner, setBanner] = useState<{ type: "notice" | "emergency" | "checkin"; title: string; message: string } | null>(null);
 
   const [notifGranted, setNotifGranted] = useState(false);
   const prevHelpStudentsRef = useRef<Set<number>>(new Set());
@@ -103,12 +99,11 @@ export default function OrganizerEventPage() {
       return;
     }
     requestNotificationPermission().then((granted) => setNotifGranted(granted));
-    setGeminiApiKeyInput(getGeminiApiKey());
   }, [router]);
 
-  const handleSaveGeminiApiKey = () => {
-    setGeminiApiKey(geminiApiKeyInput);
-    setShowSettingsModal(false);
+  const showBanner = (type: "notice" | "emergency" | "checkin", title: string, message: string) => {
+    setBanner({ type, title, message });
+    window.setTimeout(() => setBanner(null), 4000);
   };
 
   const handleEnableNotifs = async () => {
@@ -299,6 +294,7 @@ export default function OrganizerEventPage() {
         const data = await res.json();
         syncEventState(data);
         triggerNotification("📢 Announcement Broadcasted", { body: noticeText.trim() }, "notice");
+        showBanner("notice", "Announcement Sent", noticeText.trim());
         setNoticeText("");
       }
     } catch {
@@ -351,6 +347,7 @@ export default function OrganizerEventPage() {
         const data = await res.json();
         syncEventState(data);
         triggerNotification("⏱ Check-In Request Sent", { body: checkInTitle.trim() }, "notice");
+        showBanner("checkin", "Check-In Sent", checkInTitle.trim());
       }
     } catch {
       /* ignore */
@@ -386,58 +383,7 @@ export default function OrganizerEventPage() {
         syncEventState(data);
       }
       triggerNotification(`🚨 ${type.toUpperCase()} EMERGENCY DECLARED`, { body: alertText }, "emergency");
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const handleBroadcastEmergencyFromAi = async (emergencyType: string, message: string) => {
-    const fullEmergencyPayload = `[${emergencyType.toUpperCase()}] ${message.trim()}`;
-    try {
-      const res = await fetch("/api/event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "emergency", code, text: fullEmergencyPayload }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        syncEventState(data);
-      }
-      triggerNotification(`🚨 ${emergencyType.toUpperCase()} ALERT SENT`, { body: message.trim() }, "emergency");
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const handleSendNoticeFromAi = async (text: string) => {
-    try {
-      const res = await fetch("/api/event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "notice", code, text: text.trim() }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        syncEventState(data);
-      }
-      triggerNotification("📢 Announcement Broadcasted", { body: text.trim() }, "notice");
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const handleRequestCheckInFromAi = async (title: string) => {
-    try {
-      const res = await fetch("/api/event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "trigger_check_in", code, checkInTitle: title.trim() || "Safety Check-In Request" }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        syncEventState(data);
-      }
-      triggerNotification("⏱ Check-In Request Sent", { body: title.trim() }, "notice");
+      showBanner("emergency", `${type.toUpperCase()} Alert`, alertText);
     } catch {
       /* ignore */
     }
@@ -519,12 +465,6 @@ export default function OrganizerEventPage() {
             {eventData?.description && <p className="mt-1 text-sm text-slate-500">{eventData.description}</p>}
           </div>
           <div className="flex flex-wrap gap-3">
-            <button onClick={() => setShowAiAssistant(true)} className="secondary text-xs px-4 py-2 bg-violet-50 text-violet-700 ring-1 ring-violet-200">
-              ✨ AI Assistant
-            </button>
-            <button onClick={() => setShowSettingsModal(true)} className="secondary text-xs px-4 py-2 bg-slate-100 text-slate-700 ring-1 ring-slate-200">
-              ⚙️ Settings
-            </button>
             <button onClick={() => setShowCheckInModal(true)} className="primary text-xs px-4 py-2 bg-slate-800 hover:bg-slate-900">
               ⏱ Request Check-In
             </button>
@@ -754,50 +694,15 @@ export default function OrganizerEventPage() {
         </section>
       </div>
 
-      {showAiAssistant && (
-        <AiAssistant
-          eventData={eventData || { code, students: [], notices: [], messages: [], emergency: null, updatedAt: Date.now() }}
-          students={students}
-          code={code}
-          onBroadcastEmergency={handleBroadcastEmergencyFromAi}
-          onSendNotice={handleSendNoticeFromAi}
-          onRequestCheckIn={handleRequestCheckInFromAi}
-          onClose={() => setShowAiAssistant(false)}
-        />
-      )}
-
-      {showSettingsModal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-slate-900">Settings</h2>
-              <button onClick={() => setShowSettingsModal(false)} className="text-slate-400 hover:text-slate-600">
-                ✕
-              </button>
+      {banner && (
+        <div className={`fixed top-4 left-1/2 z-[60] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 rounded-2xl border px-4 py-3 shadow-2xl ${banner.type === "emergency" ? "border-red-200 bg-red-600 text-white" : banner.type === "checkin" ? "border-amber-200 bg-amber-500 text-white" : "border-slate-200 bg-slate-900 text-white"}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] opacity-80">{banner.type === "emergency" ? "Emergency Broadcast" : banner.type === "checkin" ? "Check-In Request" : "Organizer Notice"}</p>
+              <p className="mt-1 text-sm font-semibold">{banner.title}</p>
+              <p className="mt-1 text-sm opacity-90">{banner.message}</p>
             </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700">Gemini API Key</label>
-                <input
-                  type="password"
-                  value={geminiApiKeyInput}
-                  onChange={(e) => setGeminiApiKeyInput(e.target.value)}
-                  placeholder="Paste your Gemini API key"
-                  className="field mt-1.5"
-                />
-                <p className="mt-2 text-xs text-slate-500">Saved locally in this browser so the assistant can use it for this device.</p>
-              </div>
-
-              <div className="flex gap-3">
-                <button type="button" onClick={() => setShowSettingsModal(false)} className="secondary flex-1">
-                  Cancel
-                </button>
-                <button type="button" onClick={handleSaveGeminiApiKey} className="primary flex-1 font-semibold">
-                  Save Key
-                </button>
-              </div>
-            </div>
+            <button onClick={() => setBanner(null)} className="text-sm font-semibold opacity-80 hover:opacity-100">✕</button>
           </div>
         </div>
       )}
