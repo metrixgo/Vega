@@ -108,12 +108,16 @@ function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
 export async function GET(request: NextRequest) {
   loadDiskEvents();
   const { searchParams } = new URL(request.url);
-  const code = (searchParams.get("code") || "VEGA-MAIN").toUpperCase();
+  const code = (searchParams.get("code") || "8492").toUpperCase();
 
   const event = events.get(code);
 
-  if (!event || event.deleted) {
-    return NextResponse.json({ error: "Event code does not exist.", deleted: true }, { status: 404 });
+  if (!event) {
+    return NextResponse.json({ error: "Event code does not exist." }, { status: 404 });
+  }
+
+  if (event.deleted) {
+    return NextResponse.json({ error: "Event has been deleted by organizer.", deleted: true }, { status: 404 });
   }
 
   return NextResponse.json(event);

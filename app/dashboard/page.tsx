@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { addJoinedEventToUser, addOrganizedEventToUser, getCurrentUser, logoutUser, removeOrganizedEventFromUser, User } from "@/lib/auth";
+import type { EventData } from "@/lib/types";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -46,6 +47,26 @@ export default function DashboardPage() {
     // Generate a simple 4-digit numerical code (e.g., 8492)
     const code = Math.floor(1000 + Math.random() * 9000).toString();
 
+    const newEvent: EventData = {
+      code,
+      name: eventName.trim() || "Group Safety Event",
+      description: eventDesc.trim(),
+      category: eventCategory,
+      maxParticipants: Number(maxCapacity) || 20,
+      students: [],
+      notices: [],
+      messages: [],
+      emergency: null,
+      checkInRequest: null,
+      deleted: false,
+      updatedAt: Date.now(),
+    };
+
+    // Cache locally immediately before server POST to ensure millisecond 0 availability
+    if (typeof window !== "undefined") {
+      localStorage.setItem(`vega_cache_event_${code}`, JSON.stringify(newEvent));
+    }
+
     try {
       await fetch("/api/event", {
         method: "POST",
@@ -53,10 +74,10 @@ export default function DashboardPage() {
         body: JSON.stringify({
           action: "create",
           code,
-          name: eventName.trim() || "Group Safety Event",
-          description: eventDesc.trim(),
-          category: eventCategory,
-          maxParticipants: Number(maxCapacity) || 20,
+          name: newEvent.name,
+          description: newEvent.description,
+          category: newEvent.category,
+          maxParticipants: newEvent.maxParticipants,
         }),
       });
     } catch {
@@ -116,6 +137,10 @@ export default function DashboardPage() {
 
   const handleDeleteEvent = async (code: string) => {
     if (!confirm(`Are you sure you want to permanently delete event code ${code}? This action cannot be undone.`)) return;
+
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(`vega_cache_event_${code}`);
+    }
 
     try {
       await fetch("/api/event", {
