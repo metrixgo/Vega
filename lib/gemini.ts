@@ -81,6 +81,8 @@ Action types:
 
 Include actions[] only when a one-click action would help. Omit actions or use empty array for informational replies only.`;
 
+const GEMINI_MODELS = ["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-2.0-flash"];
+
 export async function askGemini(
   apiKey: string,
   userMessage: string,
@@ -104,37 +106,57 @@ ${conversation ? `RECENT CONVERSATION:\n${conversation}\n\n` : ""}Organizer: ${u
 
 Respond with JSON only.`;
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.4 },
-      }),
+  let lastError: string | null = null;
+
+  for (const model of GEMINI_MODELS) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json", temperature: 0.4, maxOutputTokens: 800 },
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const message = (err as { error?: { message?: string } }).error?.message || "Gemini API request failed";
+        lastError = message;
+        if (model === GEMINI_MODELS[GEMINI_MODELS.length - 1]) {
+          throw new Error(message);
+        }
+        continue;
+      }
+
+      const data = await res.json();
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!raw) throw new Error("No response from Gemini");
+
+      let parsed: { reply?: string; actions?: AiAction[] };
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return { role: "assistant", content: raw };
+      }
+
+      return {
+        role: "assistant",
+        content: parsed.reply || raw,
+        actions: parsed.actions?.filter((a) => a.message && a.type) || [],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Gemini API request failed";
+      if (message.includes("quota") || message.includes("429") || message.includes("not found") || message.includes("unsupported")) {
+        lastError = message;
+        continue;
+      }
+      throw err;
     }
-  );
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: { message?: string } }).error?.message || "Gemini API request failed");
   }
 
-  const data = await res.json();
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!raw) throw new Error("No response from Gemini");
-
-  let parsed: { reply?: string; actions?: AiAction[] };
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { role: "assistant", content: raw };
-  }
-
-  return {
-    role: "assistant",
-    content: parsed.reply || raw,
-    actions: parsed.actions?.filter((a) => a.message && a.type) || [],
-  };
+  throw new Error(lastError || "Gemini API request failed");
 }
