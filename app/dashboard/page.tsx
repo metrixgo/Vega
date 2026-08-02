@@ -9,10 +9,20 @@ import { addJoinedEventToUser, addOrganizedEventToUser, getCurrentUser, logoutUs
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+
+  // Join Event Modal State
   const [newJoinCode, setNewJoinCode] = useState("");
   const [participantName, setParticipantName] = useState("");
   const [participantPhone, setParticipantPhone] = useState("");
   const [showJoinModal, setShowJoinModal] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+
+  // Create Event Modal State
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [eventName, setEventName] = useState("");
+  const [eventDesc, setEventDesc] = useState("");
+  const [eventCategory, setEventCategory] = useState("Camp");
+  const [maxCapacity, setMaxCapacity] = useState(20);
 
   useEffect(() => {
     const current = getCurrentUser();
@@ -29,7 +39,8 @@ export default function DashboardPage() {
     router.push("/");
   };
 
-  const handleCreateEvent = async () => {
+  const handleCreateEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!user) return;
     const code = `VEGA-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -37,7 +48,14 @@ export default function DashboardPage() {
       await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create", code }),
+        body: JSON.stringify({
+          action: "create",
+          code,
+          name: eventName.trim() || "Group Safety Event",
+          description: eventDesc.trim(),
+          category: eventCategory,
+          maxParticipants: Number(maxCapacity) || 20,
+        }),
       });
     } catch {
       /* ignore */
@@ -46,17 +64,27 @@ export default function DashboardPage() {
     addOrganizedEventToUser(code);
     const updated = getCurrentUser();
     setUser(updated);
+    setShowCreateModal(false);
 
     router.push(`/organizer/event/${code}`);
   };
 
   const handleJoinEvent = async (e: React.FormEvent) => {
     e.preventDefault();
+    setJoinError(null);
     if (!newJoinCode.trim() || !user) return;
     const code = newJoinCode.trim().toUpperCase();
 
     try {
-      await fetch("/api/event", {
+      // Validate code & capacity
+      const checkRes = await fetch(`/api/event?code=${encodeURIComponent(code)}`);
+      if (!checkRes.ok) {
+        const errData = await checkRes.json();
+        setJoinError(errData.error || "Invalid Event Code. Event does not exist.");
+        return;
+      }
+
+      const res = await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -66,16 +94,22 @@ export default function DashboardPage() {
           phone: participantPhone,
         }),
       });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        setJoinError(errData.error || "Failed to join event.");
+        return;
+      }
+
+      addJoinedEventToUser(code);
+      const updated = getCurrentUser();
+      setUser(updated);
+      setShowJoinModal(false);
+
+      router.push(`/participant/event/${code}?name=${encodeURIComponent(participantName || user.name)}&phone=${encodeURIComponent(participantPhone)}`);
     } catch {
-      /* ignore */
+      setJoinError("Network error. Please try again.");
     }
-
-    addJoinedEventToUser(code);
-    const updated = getCurrentUser();
-    setUser(updated);
-    setShowJoinModal(false);
-
-    router.push(`/participant/event/${code}?name=${encodeURIComponent(participantName || user.name)}&phone=${encodeURIComponent(participantPhone)}`);
   };
 
   const handleDeleteEvent = async (code: string) => {
@@ -127,10 +161,24 @@ export default function DashboardPage() {
               <p className="mt-1 text-sm text-slate-500">Manage all your organized safety events and joined groups from here.</p>
             </div>
             <div className="flex flex-wrap gap-3">
-              <button onClick={handleCreateEvent} className="primary px-5 py-3 text-sm font-semibold shadow-sm">
+              <button
+                onClick={() => {
+                  setEventName("");
+                  setEventDesc("");
+                  setShowCreateModal(true);
+                }}
+                className="primary px-5 py-3 text-sm font-semibold shadow-sm"
+              >
                 + Create New Event
               </button>
-              <button onClick={() => setShowJoinModal(true)} className="secondary px-5 py-3 text-sm font-semibold">
+              <button
+                onClick={() => {
+                  setJoinError(null);
+                  setNewJoinCode("");
+                  setShowJoinModal(true);
+                }}
+                className="secondary px-5 py-3 text-sm font-semibold"
+              >
                 Join Event with Code
               </button>
             </div>
@@ -150,7 +198,13 @@ export default function DashboardPage() {
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
               <p className="font-semibold text-slate-700">No organized events yet</p>
               <p className="mt-1 text-xs text-slate-500">Events you create are permanently saved to your account dashboard until you manually delete them.</p>
-              <button onClick={handleCreateEvent} className="primary mt-4 text-xs font-semibold px-4 py-2">
+              <button
+                onClick={() => {
+                  setEventName("");
+                  setShowCreateModal(true);
+                }}
+                className="primary mt-4 text-xs font-semibold px-4 py-2"
+              >
                 Create First Event
               </button>
             </div>
@@ -165,7 +219,7 @@ export default function DashboardPage() {
                         Organizer
                       </span>
                     </div>
-                    <h3 className="mt-3 font-semibold text-slate-900 text-base">Group Safety Room</h3>
+                    <h3 className="mt-3 font-semibold text-slate-900 text-base">Group Safety Control Room</h3>
                     <p className="mt-1 text-xs text-slate-500">Real-time live map & status check-in center</p>
                   </div>
 
@@ -200,7 +254,13 @@ export default function DashboardPage() {
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
               <p className="font-semibold text-slate-700">No joined events yet</p>
               <p className="mt-1 text-xs text-slate-500">Enter an event code shared by your organizer to join their safety check-in room.</p>
-              <button onClick={() => setShowJoinModal(true)} className="secondary mt-4 text-xs font-semibold px-4 py-2">
+              <button
+                onClick={() => {
+                  setJoinError(null);
+                  setShowJoinModal(true);
+                }}
+                className="secondary mt-4 text-xs font-semibold px-4 py-2"
+              >
                 Join Event with Code
               </button>
             </div>
@@ -234,7 +294,73 @@ export default function DashboardPage() {
         </section>
       </div>
 
-      {/* Join Modal */}
+      {/* Enhanced Create Event Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-slate-900">Create New Event</h2>
+              <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-slate-600">
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateEvent} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Event Name</label>
+                <input
+                  type="text"
+                  required
+                  value={eventName}
+                  onChange={(e) => setEventName(e.target.value)}
+                  placeholder="e.g., Summer Camp 2026 / SF Hackathon"
+                  className="field mt-1.5"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Category</label>
+                <select value={eventCategory} onChange={(e) => setEventCategory(e.target.value)} className="field mt-1.5 bg-white">
+                  <option value="Camp">Camp / Retreat</option>
+                  <option value="Hackathon">Hackathon / Conference</option>
+                  <option value="Field Trip">Field Trip / Tour</option>
+                  <option value="Outdoor Excursion">Outdoor Excursion / Hiking</option>
+                  <option value="General">General Event</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Description (Optional)</label>
+                <textarea
+                  value={eventDesc}
+                  onChange={(e) => setEventDesc(e.target.value)}
+                  placeholder="Brief details about location, meeting point, or schedule…"
+                  className="field mt-1.5 min-h-20 resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Max Participant Capacity</label>
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={200}
+                  value={maxCapacity}
+                  onChange={(e) => setMaxCapacity(Number(e.target.value))}
+                  className="field mt-1.5"
+                />
+              </div>
+
+              <button type="submit" className="primary w-full py-3 mt-2 font-semibold">
+                Create & Launch Control Center
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Validate & Join Modal */}
       {showJoinModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl">
@@ -244,6 +370,12 @@ export default function DashboardPage() {
                 ✕
               </button>
             </div>
+
+            {joinError && (
+              <div className="mb-4 rounded-xl bg-red-50 p-3.5 text-xs font-semibold text-red-700 ring-1 ring-red-200">
+                {joinError}
+              </div>
+            )}
 
             <form onSubmit={handleJoinEvent} className="space-y-4">
               <div>
@@ -281,8 +413,8 @@ export default function DashboardPage() {
                 />
               </div>
 
-              <button type="submit" className="primary w-full py-3 mt-2">
-                Join Event Space
+              <button type="submit" className="primary w-full py-3 mt-2 font-semibold">
+                Validate Code & Join Space
               </button>
             </form>
           </div>

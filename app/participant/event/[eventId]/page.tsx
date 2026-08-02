@@ -4,9 +4,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, removeJoinedEventFromUser } from "@/lib/auth";
 import { isNotificationGranted, requestNotificationPermission, triggerNotification } from "@/lib/notifications";
-import type { Status, Notice } from "@/lib/types";
+import type { Status, Notice, CheckInRequest, EventData } from "@/lib/types";
 
 const tone: Record<Status, string> = {
   Safe: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -38,8 +38,11 @@ export default function ParticipantEventPage() {
   const [phone, setPhone] = useState(queryPhone);
   const [studentId, setStudentId] = useState<number | null>(null);
 
+  const [eventData, setEventData] = useState<EventData | null>(null);
   const [status, setStatus] = useState<Status>("Unchecked");
   const [notices, setNotices] = useState<Notice[]>([]);
+  const [checkInReq, setCheckInReq] = useState<CheckInRequest | null>(null);
+
   const [activeEmergency, setActiveEmergency] = useState<string | null>(null);
   const [dismissedEmergencyText, setDismissedEmergencyText] = useState<string | null>(null);
 
@@ -49,6 +52,7 @@ export default function ParticipantEventPage() {
 
   const prevNoticeCountRef = useRef<number>(0);
   const prevEmergencyRef = useRef<string | null>(null);
+  const prevCheckInIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     setNotifGranted(isNotificationGranted());
@@ -80,26 +84,52 @@ export default function ParticipantEventPage() {
       if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await fetch(`/api/event?code=${encodeURIComponent(code)}`);
-        if (!res.ok) return;
-        const data = await res.json();
+        if (!res.ok) {
+          const errData = await res.json();
+          if (errData.deleted) {
+            alert("This event has been deleted by the organizer.");
+            removeJoinedEventFromUser(code);
+            router.push("/dashboard");
+            return;
+          }
+        }
+        const data: EventData = await res.json();
+
+        if (data.deleted) {
+          alert("This event has been deleted by the organizer.");
+          removeJoinedEventFromUser(code);
+          router.push("/dashboard");
+          return;
+        }
+
         if (isSubscribed) {
+          setEventData(data);
           const currentNotices: Notice[] = data.notices || [];
           setNotices(currentNotices);
+          setCheckInReq(data.checkInRequest || null);
 
-          // Emergency Alert Logic (Fixes Emergency Popup Loop Bug)
+          // Emergency Alert Logic
           const serverEmergency: string | null = data.emergency || null;
           if (serverEmergency && serverEmergency !== dismissedEmergencyText) {
             setActiveEmergency(serverEmergency);
           } else if (!serverEmergency) {
             setActiveEmergency(null);
-            setDismissedEmergencyText(null); // Reset dismissed token when server clears emergency
+            setDismissedEmergencyText(null);
           }
 
           // Find current student status & ID from server
-          const me = (data.students || []).find((s: { id: number; name: string; phone?: string }) => s.name.toLowerCase() === name.toLowerCase() || (phone && s.phone === phone));
+          const me = (data.students || []).find(
+            (s: { id: number; name: string; phone?: string }) => s.name.toLowerCase() === name.toLowerCase() || (phone && s.phone === phone)
+          );
           if (me) {
             setStatus(me.status);
             setStudentId(me.id);
+          }
+
+          // Native Popup Notification for Check-In Request
+          if (data.checkInRequest && data.checkInRequest.active && data.checkInRequest.id !== prevCheckInIdRef.current) {
+            triggerNotification("⏱ CHECK-IN REQUESTED", { body: data.checkInRequest.title }, "notice");
+            prevCheckInIdRef.current = data.checkInRequest.id;
           }
 
           // Native Popup Notification for New Announcements
@@ -137,7 +167,7 @@ export default function ParticipantEventPage() {
         document.removeEventListener("visibilitychange", handleVis);
       }
     };
-  }, [code, name, phone, dismissedEmergencyText]);
+  }, [code, name, phone, dismissedEmergencyText, router]);
 
   const handleLocate = () => {
     if (typeof window === "undefined" || !navigator.geolocation) {
@@ -177,6 +207,19 @@ export default function ParticipantEventPage() {
     }
   };
 
+  const handleConfirmCheckIn = async () => {
+    setStatus("Safe");
+    try {
+      await fetch("/api/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "confirm_check_in", code, studentId, studentName: name, phone }),
+      });
+    } catch {
+      /* ignore */
+    }
+  };
+
   const handleNeedHelp = (issue: string) => {
     setReport(issue);
     handleUpdateStatus("Needs help", issue);
@@ -200,6 +243,23 @@ export default function ParticipantEventPage() {
     }
   };
 
+  const handleLeaveEvent = async () => {
+    if (!confirm("Are you sure you want to leave this event session?")) return;
+
+    try {
+      await fetch("/api/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "leave", code, studentId, studentName: name, phone }),
+      });
+    } catch {
+      /* ignore */
+    }
+
+    removeJoinedEventFromUser(code);
+    router.push("/dashboard");
+  };
+
   return (
     <main className="min-h-screen pb-10">
       <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 md:px-8">
@@ -208,8 +268,8 @@ export default function ParticipantEventPage() {
             <Image src="/images/logo.png" alt="Vega Logo" fill className="object-cover" />
           </Link>
           <div>
-            <div className="font-bold text-slate-900">Vega Safety Check-In</div>
-            <div className="text-xs text-slate-500">Participant View</div>
+            <div className="font-bold text-slate-900">{eventData?.name || "Vega Safety Check-In"}</div>
+            <div className="text-xs text-slate-500">{eventData?.category || "General"} Participant Space</div>
           </div>
         </div>
 
@@ -220,9 +280,9 @@ export default function ParticipantEventPage() {
             </button>
           )}
           <span className="rounded-lg bg-slate-100 px-3 py-1 font-mono text-xs font-bold text-slate-800">{code}</span>
-          <Link href="/dashboard" className="text-sm font-medium text-slate-500 hover:text-slate-900">
-            Dashboard
-          </Link>
+          <button onClick={handleLeaveEvent} className="text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg ring-1 ring-red-200">
+            Leave Event
+          </button>
         </div>
       </header>
 
@@ -234,6 +294,25 @@ export default function ParticipantEventPage() {
           </div>
           <Badge status={status} />
         </div>
+
+        {/* Check-In Request Banner */}
+        {checkInReq && checkInReq.active && (
+          <section className="mt-6 rounded-2xl bg-emerald-600 text-white p-6 shadow-md border border-emerald-500 animate-pulse">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-100">⏱ Check-In Requested by Organizer</span>
+                <h2 className="text-xl font-extrabold mt-1">{checkInReq.title}</h2>
+                {checkInReq.scheduledTime && <p className="text-xs text-emerald-100 mt-1">Deadline: {checkInReq.scheduledTime}</p>}
+              </div>
+              <button
+                onClick={handleConfirmCheckIn}
+                className="w-full sm:w-auto bg-white text-emerald-700 font-extrabold px-6 py-3 rounded-xl shadow-md hover:bg-emerald-50 active:scale-95 transition"
+              >
+                CONFIRM CHECK-IN NOW
+              </button>
+            </div>
+          </section>
+        )}
 
         {/* Current Status Box */}
         <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm border border-slate-200">
@@ -308,7 +387,7 @@ export default function ParticipantEventPage() {
         </section>
       </div>
 
-      {/* Emergency Full-Screen Red Alert Modal (With Permanent Dismissal Token) */}
+      {/* Emergency Full-Screen Red Alert Modal */}
       {activeEmergency && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-red-600 p-5 text-center text-white animate-fade-in">
           <div className="max-w-lg">

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { EventData, Student, Status, Notice } from "@/lib/types";
+import type { EventData, Student, Status, Notice, CheckInRequest } from "@/lib/types";
 
 // Global in-memory cache for fast local access
 const globalEvents = globalThis as unknown as {
@@ -12,7 +12,6 @@ if (!globalEvents._vegaEvents) {
 
 const events = globalEvents._vegaEvents;
 
-// Helper to find student index by ID, phone, or name
 function findStudentIndex(students: Student[], query: { id?: number; phone?: string; name?: string }): number {
   if (query.id) {
     const idx = students.findIndex((s) => s.id === query.id);
@@ -30,7 +29,6 @@ function findStudentIndex(students: Student[], query: { id?: number; phone?: str
   return -1;
 }
 
-// Helper to merge student arrays without losing participants
 function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
   const mergedMap = new Map<string, Student>();
 
@@ -46,7 +44,6 @@ function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
       mergedMap.set(key, {
         ...prev,
         ...s,
-        // Preserve phone/name if incoming is empty
         name: s.name || prev.name,
         phone: s.phone || prev.phone,
         location: s.location || prev.location,
@@ -60,7 +57,6 @@ function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
   return Array.from(mergedMap.values());
 }
 
-// Helper to fetch/sync from persistent cloud storage
 async function fetchCloudEvent(code: string): Promise<EventData | null> {
   try {
     const res = await fetch(`https://api.restful-api.dev/objects`, { cache: "no-store" });
@@ -71,15 +67,20 @@ async function fetchCloudEvent(code: string): Promise<EventData | null> {
     const match = items.find((item: { name?: string }) => item.name === `VEGA_EVENT_${code}`);
     if (match && match.data) {
       const existingInMemory = events.get(code);
-
       const cloudStudents: Student[] = match.data.students || [];
       const combinedStudents = existingInMemory ? mergeStudents(cloudStudents, existingInMemory.students) : cloudStudents;
 
       const data: EventData = {
         code,
+        name: match.data.name || existingInMemory?.name || "Group Safety Event",
+        description: match.data.description || existingInMemory?.description || "",
+        category: match.data.category || existingInMemory?.category || "General",
+        maxParticipants: match.data.maxParticipants || existingInMemory?.maxParticipants || 20,
         students: combinedStudents,
         notices: match.data.notices || (existingInMemory ? existingInMemory.notices : []),
         emergency: match.data.emergency !== undefined ? match.data.emergency : existingInMemory ? existingInMemory.emergency : null,
+        checkInRequest: match.data.checkInRequest !== undefined ? match.data.checkInRequest : existingInMemory ? existingInMemory.checkInRequest : null,
+        deleted: match.data.deleted || existingInMemory?.deleted || false,
         updatedAt: Math.max(match.data.updatedAt || 0, existingInMemory?.updatedAt || Date.now()),
         cloudObjectId: match.id,
       };
@@ -98,9 +99,15 @@ async function saveCloudEvent(data: EventData): Promise<void> {
       name: `VEGA_EVENT_${data.code}`,
       data: {
         code: data.code,
+        name: data.name,
+        description: data.description,
+        category: data.category,
+        maxParticipants: data.maxParticipants,
         students: data.students,
         notices: data.notices,
         emergency: data.emergency,
+        checkInRequest: data.checkInRequest,
+        deleted: data.deleted || false,
         updatedAt: data.updatedAt,
       },
     };
@@ -134,9 +141,14 @@ function getOrCreateEvent(code: string): EventData {
   if (!event) {
     event = {
       code,
+      name: "Group Safety Event",
+      category: "General",
+      maxParticipants: 20,
       students: [],
       notices: [],
       emergency: null,
+      checkInRequest: null,
+      deleted: false,
       updatedAt: Date.now(),
     };
     events.set(code, event);
@@ -153,9 +165,11 @@ export async function GET(request: NextRequest) {
     const cloudData = await fetchCloudEvent(code);
     if (cloudData) {
       event = cloudData;
-    } else if (!event) {
-      event = getOrCreateEvent(code);
     }
+  }
+
+  if (!event || event.deleted) {
+    return NextResponse.json({ error: "Event code does not exist.", deleted: true }, { status: 404 });
   }
 
   return NextResponse.json(event);
@@ -164,12 +178,55 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, code: rawCode, studentId, studentName, name, phone, location, status, issue, text } = body;
+    const {
+      action,
+      code: rawCode,
+      name: eventName,
+      description: eventDesc,
+      category: eventCat,
+      maxParticipants: eventMax,
+      studentId,
+      studentName,
+      name,
+      phone,
+      location,
+      status,
+      issue,
+      text,
+      checkInTitle,
+      scheduledTime,
+    } = body;
+
     const code = (rawCode || "VEGA-MAIN").toUpperCase();
 
-    let event = events.get(code);
+    let event: EventData | null | undefined = events.get(code);
     if (!event) {
-      event = (await fetchCloudEvent(code)) || getOrCreateEvent(code);
+      event = (await fetchCloudEvent(code)) || null;
+    }
+
+    // Action: CREATE
+    if (action === "create") {
+      event = {
+        code,
+        name: eventName || "Group Safety Event",
+        description: eventDesc || "",
+        category: eventCat || "General",
+        maxParticipants: typeof eventMax === "number" ? eventMax : 20,
+        students: [],
+        notices: [],
+        emergency: null,
+        checkInRequest: null,
+        deleted: false,
+        updatedAt: Date.now(),
+      };
+      events.set(code, event);
+      saveCloudEvent(event);
+      return NextResponse.json(event);
+    }
+
+    // Check if event is valid / deleted for non-create actions
+    if (!event || event.deleted) {
+      return NextResponse.json({ error: "Invalid Event Code. Event does not exist.", deleted: true }, { status: 404 });
     }
 
     event.updatedAt = Date.now();
@@ -178,19 +235,23 @@ export async function POST(request: NextRequest) {
     const targetPhone = phone || "";
     const targetId = typeof studentId === "number" ? studentId : undefined;
 
-    if (action === "create") {
-      event.students = [];
-      event.notices = [];
-      event.emergency = null;
-    } else if (action === "join") {
-      const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
+    if (action === "join") {
+      // Check Capacity Limit
+      const existingIdx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
+      if (existingIdx < 0 && event.maxParticipants && event.students.length >= event.maxParticipants) {
+        return NextResponse.json(
+          { error: `Event has reached maximum capacity of ${event.maxParticipants} participants.` },
+          { status: 400 }
+        );
+      }
+
       const studentLoc: [number, number] = location || [37.7749, -122.4194];
 
-      if (idx >= 0) {
-        event.students[idx] = {
-          ...event.students[idx],
-          name: targetName || event.students[idx].name,
-          phone: targetPhone || event.students[idx].phone,
+      if (existingIdx >= 0) {
+        event.students[existingIdx] = {
+          ...event.students[existingIdx],
+          name: targetName || event.students[existingIdx].name,
+          phone: targetPhone || event.students[existingIdx].phone,
           location: studentLoc,
           lastSeen: "Just now",
         };
@@ -205,6 +266,11 @@ export async function POST(request: NextRequest) {
         };
         event.students.push(newStudent);
       }
+    } else if (action === "leave") {
+      const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
+      if (idx >= 0) {
+        event.students.splice(idx, 1);
+      }
     } else if (action === "update_status") {
       const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
       const studentLoc: [number, number] = location || [37.7749, -122.4194];
@@ -215,7 +281,6 @@ export async function POST(request: NextRequest) {
         if (location) event.students[idx].location = location;
         event.students[idx].lastSeen = "Just now";
       } else {
-        // Robust Upsert: If student not found on status update, create them so they are NEVER lost
         event.students.push({
           id: targetId || Date.now() + Math.floor(Math.random() * 1000),
           name: targetName || "Participant",
@@ -234,7 +299,6 @@ export async function POST(request: NextRequest) {
         if (location) event.students[idx].location = location;
         event.students[idx].lastSeen = "Just now";
       } else {
-        // Robust Upsert: If student not found on GPS update, add them immediately!
         event.students.push({
           id: targetId || Date.now() + Math.floor(Math.random() * 1000),
           name: targetName || "Participant",
@@ -244,6 +308,26 @@ export async function POST(request: NextRequest) {
           lastSeen: "Just now",
         });
       }
+    } else if (action === "trigger_check_in") {
+      const req: CheckInRequest = {
+        id: Date.now(),
+        title: checkInTitle || "Instant Safety Check-In",
+        scheduledTime: scheduledTime || undefined,
+        createdAt: Date.now(),
+        active: true,
+      };
+      event.checkInRequest = req;
+    } else if (action === "confirm_check_in") {
+      const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
+      const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      if (idx >= 0) {
+        event.students[idx].status = "Safe";
+        event.students[idx].issue = undefined;
+        event.students[idx].checkedInAt = timeStr;
+        event.students[idx].lastSeen = "Just now";
+      }
+    } else if (action === "clear_check_in") {
+      event.checkInRequest = null;
     } else if (action === "notice") {
       if (text) {
         const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -264,17 +348,22 @@ export async function POST(request: NextRequest) {
       event.students = [];
       event.notices = [];
       event.emergency = null;
+      event.checkInRequest = null;
     } else if (action === "delete") {
-      events.delete(code);
+      event.deleted = true;
+      event.students = [];
+      event.notices = [];
+      event.emergency = null;
+      event.checkInRequest = null;
+      events.set(code, event);
+
       if (event.cloudObjectId) {
         fetch(`https://api.restful-api.dev/objects/${event.cloudObjectId}`, { method: "DELETE" }).catch(() => {});
       }
-      return NextResponse.json({ success: true, deleted: code });
+      return NextResponse.json({ success: true, deleted: true, code });
     }
 
     events.set(code, event);
-
-    // Save to persistent cloud store asynchronously
     saveCloudEvent(event);
 
     return NextResponse.json(event);

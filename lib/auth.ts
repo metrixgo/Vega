@@ -164,3 +164,10 @@ export function removeOrganizedEventFromUser(code: string): void {
   user.organizedEvents = user.organizedEvents.filter((c) => c !== code);
   setCurrentUser(user);
 }
+
+export function removeJoinedEventFromUser(code: string): void {
+  const user = getCurrentUser();
+  if (!user) return;
+  user.joinedEvents = user.joinedEvents.filter((c) => c !== code);
+  setCurrentUser(user);
+}

@@ -7,7 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { removeOrganizedEventFromUser } from "@/lib/auth";
 import { isNotificationGranted, requestNotificationPermission, triggerNotification } from "@/lib/notifications";
-import type { Status, Student, Notice } from "@/lib/types";
+import type { Status, Student, Notice, CheckInRequest, EventData } from "@/lib/types";
 
 const EventMap = dynamic(() => import("@/app/map"), {
   ssr: false,
@@ -35,17 +35,25 @@ export default function OrganizerEventPage() {
   const rawCode = (params?.eventId as string) || "VEGA-MAIN";
   const code = rawCode.toUpperCase();
 
+  const [eventData, setEventData] = useState<EventData | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
+  const [checkInReq, setCheckInReq] = useState<CheckInRequest | null>(null);
 
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Status | "All">("All");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
   const [noticeText, setNoticeText] = useState("");
   const [alertText, setAlertText] = useState("Please go calmly to the designated assembly point.");
   const [showAlertModal, setShowAlertModal] = useState(false);
-  const [notifGranted, setNotifGranted] = useState(false);
 
+  // Check-In Modal State
+  const [showCheckInModal, setShowCheckInModal] = useState(false);
+  const [checkInTitle, setCheckInTitle] = useState("Instant Safety Check-In");
+  const [scheduledTime, setScheduledTime] = useState("");
+
+  const [notifGranted, setNotifGranted] = useState(false);
   const prevHelpStudentsRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
@@ -68,14 +76,24 @@ export default function OrganizerEventPage() {
       if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await fetch(`/api/event?code=${encodeURIComponent(code)}`);
-        if (!res.ok) return;
-        const data = await res.json();
+        if (!res.ok) {
+          const errData = await res.json();
+          if (errData.deleted) {
+            alert("This event has been deleted.");
+            removeOrganizedEventFromUser(code);
+            router.push("/dashboard");
+            return;
+          }
+        }
+        const data: EventData = await res.json();
         if (isSubscribed) {
+          setEventData(data);
           const currentStudents: Student[] = data.students || [];
           setStudents(currentStudents);
           setNotices(data.notices || []);
+          setCheckInReq(data.checkInRequest || null);
 
-          // Check for newly reported help requests to trigger native browser notification
+          // Check for newly reported help requests
           const helpStudents = currentStudents.filter((s) => s.status === "Needs help");
           helpStudents.forEach((s) => {
             if (!prevHelpStudentsRef.current.has(s.id)) {
@@ -110,7 +128,7 @@ export default function OrganizerEventPage() {
         document.removeEventListener("visibilitychange", handleVis);
       }
     };
-  }, [code]);
+  }, [code, router]);
 
   const selected = useMemo(() => students.find((s) => s.id === selectedId) || students[0] || null, [students, selectedId]);
 
@@ -120,6 +138,7 @@ export default function OrganizerEventPage() {
   );
 
   const count = (status: Status) => students.filter((student) => student.status === status).length;
+  const checkedInCount = useMemo(() => students.filter((s) => s.status === "Safe" || s.checkedInAt).length, [students]);
 
   const handleSendNotice = async () => {
     if (!noticeText.trim()) return;
@@ -134,6 +153,42 @@ export default function OrganizerEventPage() {
         setNotices(data.notices || []);
         setNoticeText("");
       }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleTriggerCheckIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setShowCheckInModal(false);
+    try {
+      const res = await fetch("/api/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "trigger_check_in",
+          code,
+          checkInTitle: checkInTitle.trim() || "Safety Check-In Request",
+          scheduledTime: scheduledTime || undefined,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCheckInReq(data.checkInRequest);
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleClearCheckIn = async () => {
+    try {
+      await fetch("/api/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clear_check_in", code }),
+      });
+      setCheckInReq(null);
     } catch {
       /* ignore */
     }
@@ -169,7 +224,7 @@ export default function OrganizerEventPage() {
   };
 
   const handleDeleteEvent = async () => {
-    if (!confirm(`Are you sure you want to delete event ${code}? This will remove it permanently.`)) return;
+    if (!confirm(`Are you sure you want to delete event ${code}? This will remove it permanently for all participants.`)) return;
 
     try {
       await fetch("/api/event", {
@@ -193,19 +248,21 @@ export default function OrganizerEventPage() {
             <Image src="/images/logo.png" alt="Vega Logo" fill className="object-cover" />
           </Link>
           <div>
-            <div className="font-bold text-slate-900">Vega Safety Control Center</div>
-            <div className="text-xs text-slate-500">Organizer Live View</div>
+            <div className="font-bold text-slate-900">{eventData?.name || "Vega Safety Control Center"}</div>
+            <div className="text-xs text-slate-500">
+              {eventData?.category || "General"} · {students.length} / {eventData?.maxParticipants || 20} Capacity
+            </div>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
           {!notifGranted && (
             <button onClick={handleEnableNotifs} className="secondary text-xs font-semibold text-amber-700 bg-amber-50 ring-1 ring-amber-200">
-              🔔 Enable Push Notifications
+              🔔 Enable Notifications
             </button>
           )}
           <div className="flex flex-col items-end">
-            <span className="text-[10px] uppercase font-bold text-slate-400">Event Code</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400">Share Code</span>
             <span className="rounded-lg bg-slate-100 px-3 py-1 font-mono text-xs font-bold text-slate-800">{code}</span>
           </div>
           <Link href="/dashboard" className="text-sm font-medium text-slate-500 hover:text-slate-900">
@@ -218,22 +275,53 @@ export default function OrganizerEventPage() {
         <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-emerald-600">● Live Cross-Device Sync Active</p>
-            <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">Group Monitor & Safety</h1>
+            <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">{eventData?.name || "Group Monitor & Safety"}</h1>
+            {eventData?.description && <p className="mt-1 text-sm text-slate-500">{eventData.description}</p>}
           </div>
-          <div className="flex gap-3">
-            <button onClick={handleDeleteEvent} className="danger text-xs px-4 py-2">
-              Delete Event
+          <div className="flex flex-wrap gap-3">
+            <button onClick={() => setShowCheckInModal(true)} className="primary text-xs px-4 py-2 bg-slate-800 hover:bg-slate-900">
+              ⏱ Request Check-In
             </button>
             <button onClick={() => setShowAlertModal(true)} className="danger text-sm px-4 py-2 bg-red-600 hover:bg-red-700">
               Declare Emergency
             </button>
+            <button onClick={handleDeleteEvent} className="danger text-xs px-3 py-2 bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-700 ring-1 ring-slate-200">
+              Delete Event
+            </button>
           </div>
         </div>
 
+        {/* Real-time Check-In Progress Banner */}
+        {checkInReq && (
+          <div className="mb-6 rounded-2xl bg-slate-900 text-white p-5 shadow-md flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-xs uppercase font-bold tracking-wider text-emerald-400">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                Active Check-In Request: {checkInReq.title}
+              </div>
+              {checkInReq.scheduledTime && <p className="text-xs text-slate-300 mt-1">Scheduled Deadline: {checkInReq.scheduledTime}</p>}
+            </div>
+            <div className="flex items-center gap-4 w-full sm:w-auto">
+              <div className="flex-1 sm:w-48 bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700">
+                <div
+                  className="bg-emerald-500 h-full transition-all duration-500"
+                  style={{ width: `${students.length > 0 ? Math.round((checkedInCount / students.length) * 100) : 0}%` }}
+                />
+              </div>
+              <span className="text-xs font-bold text-slate-200">
+                {checkedInCount} / {students.length} Checked In
+              </span>
+              <button onClick={handleClearCheckIn} className="text-xs text-slate-400 hover:text-white underline">
+                Close Request
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Metrics Grid */}
         <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Metric label="Total Registered" value={students.length} />
-          <Metric label="Safe" value={count("Safe")} color="text-emerald-600" />
+          <Metric label="Registered" value={students.length} />
+          <Metric label="Safe / Checked In" value={count("Safe")} color="text-emerald-600" />
           <Metric label="Needs Help" value={count("Needs help")} color="text-red-600" />
           <Metric label="Unchecked" value={count("Unchecked")} />
         </div>
@@ -298,7 +386,9 @@ export default function OrganizerEventPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold text-slate-900">{student.name}</p>
-                      <p className="mt-1 text-xs text-slate-500">Seen {student.lastSeen}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {student.checkedInAt ? `Checked in at ${student.checkedInAt}` : `Seen ${student.lastSeen}`}
+                      </p>
                     </div>
                     <Badge status={student.status} />
                   </button>
@@ -337,6 +427,12 @@ export default function OrganizerEventPage() {
                       {selected.location[0].toFixed(4)}, {selected.location[1].toFixed(4)}
                     </span>
                   </p>
+                  {selected.checkedInAt && (
+                    <p>
+                      <span className="block text-xs text-slate-400">Check-In Confirmation</span>
+                      <span className="font-medium text-emerald-600">{selected.checkedInAt}</span>
+                    </p>
+                  )}
                   {selected.issue && (
                     <p>
                       <span className="block text-xs text-slate-400">Reported Issue</span>
@@ -389,6 +485,55 @@ export default function OrganizerEventPage() {
           </div>
         </section>
       </div>
+
+      {/* Check-In Request Modal */}
+      {showCheckInModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-slate-900">Request Safety Check-In</h2>
+              <button onClick={() => setShowCheckInModal(false)} className="text-slate-400 hover:text-slate-600">
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">Prompts all participants on their mobile phones to confirm their wellbeing.</p>
+
+            <form onSubmit={handleTriggerCheckIn} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Check-In Request Title</label>
+                <input
+                  type="text"
+                  required
+                  value={checkInTitle}
+                  onChange={(e) => setCheckInTitle(e.target.value)}
+                  placeholder="e.g., Afternoon Check-In / Bus Departure Check-In"
+                  className="field mt-1.5"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Scheduled Time / Deadline (Optional)</label>
+                <input
+                  type="text"
+                  value={scheduledTime}
+                  onChange={(e) => setScheduledTime(e.target.value)}
+                  placeholder="e.g., 3:00 PM / In 15 Minutes"
+                  className="field mt-1.5"
+                />
+              </div>
+
+              <div className="mt-5 flex gap-3">
+                <button type="button" onClick={() => setShowCheckInModal(false)} className="secondary flex-1">
+                  Cancel
+                </button>
+                <button type="submit" className="primary flex-1 font-semibold">
+                  Send Check-In Request
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Emergency Modal */}
       {showAlertModal && (
