@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getCurrentUser, removeOrganizedEventFromUser } from "@/lib/auth";
+import { removeOrganizedEventFromUser } from "@/lib/auth";
 import { isNotificationGranted, requestNotificationPermission, triggerNotification } from "@/lib/notifications";
 import type { Status, Student, Notice } from "@/lib/types";
 
@@ -37,7 +37,6 @@ export default function OrganizerEventPage() {
 
   const [students, setStudents] = useState<Student[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
-  const [emergency, setEmergency] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Status | "All">("All");
@@ -75,7 +74,6 @@ export default function OrganizerEventPage() {
           const currentStudents: Student[] = data.students || [];
           setStudents(currentStudents);
           setNotices(data.notices || []);
-          setEmergency(data.emergency);
 
           // Check for newly reported help requests to trigger native browser notification
           const helpStudents = currentStudents.filter((s) => s.status === "Needs help");
@@ -133,7 +131,7 @@ export default function OrganizerEventPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setNotices(data.notices);
+        setNotices(data.notices || []);
         setNoticeText("");
       }
     } catch {
@@ -142,7 +140,6 @@ export default function OrganizerEventPage() {
   };
 
   const handleDeclareEmergency = async () => {
-    setEmergency(alertText);
     setShowAlertModal(false);
     try {
       await fetch("/api/event", {
@@ -164,7 +161,7 @@ export default function OrganizerEventPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setStudents(data.students);
+        setStudents(data.students || []);
       }
     } catch {
       /* ignore */

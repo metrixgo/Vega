@@ -7,11 +7,14 @@ export type User = {
   joinedEvents: string[]; // event codes joined by participant
 };
 
+export type UserAccountRecord = User & {
+  passwordHash: string;
+};
+
 const USER_SESSION_KEY = "vega_user_session";
 const USERS_DB_KEY = "vega_users_db";
 
-// Helper to get local user database
-function getUsersDB(): Record<string, User & { passwordHash: string }> {
+function getUsersDB(): Record<string, UserAccountRecord> {
   if (typeof window === "undefined") return {};
   try {
     const data = localStorage.getItem(USERS_DB_KEY);
@@ -21,7 +24,7 @@ function getUsersDB(): Record<string, User & { passwordHash: string }> {
   }
 }
 
-function saveUsersDB(db: Record<string, User & { passwordHash: string }>) {
+function saveUsersDB(db: Record<string, UserAccountRecord>) {
   if (typeof window === "undefined") return;
   localStorage.setItem(USERS_DB_KEY, JSON.stringify(db));
 }
@@ -55,9 +58,22 @@ export function setCurrentUser(user: User | null): void {
   }
 }
 
-export function registerUser(email: string, name: string, role: "organizer" | "participant"): User {
+export function registerUser(email: string, password: string, name: string, role: "organizer" | "participant"): User {
   const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes("@")) {
+    throw new Error("Please enter a valid email address.");
+  }
+  if (!password || password.length < 4) {
+    throw new Error("Password must be at least 4 characters long.");
+  }
+  if (!name.trim()) {
+    throw new Error("Please enter your full name.");
+  }
+
   const db = getUsersDB();
+  if (db[cleanEmail]) {
+    throw new Error("An account with this email already exists. Please sign in.");
+  }
 
   const newUser: User = {
     id: `usr_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
@@ -70,12 +86,13 @@ export function registerUser(email: string, name: string, role: "organizer" | "p
 
   db[cleanEmail] = {
     ...newUser,
-    passwordHash: "default",
+    passwordHash: btoa(password), // simple obfuscation
   };
+
   saveUsersDB(db);
   setCurrentUser(newUser);
 
-  // Sync session with server API asynchronously
+  // Sync with server API
   fetch("/api/auth", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -85,24 +102,35 @@ export function registerUser(email: string, name: string, role: "organizer" | "p
   return newUser;
 }
 
-export function loginUser(email: string, name?: string): User {
+export function loginUser(email: string, password: string): User {
   const cleanEmail = email.trim().toLowerCase();
-  const db = getUsersDB();
-  let user = db[cleanEmail];
-
-  if (!user) {
-    user = {
-      id: `usr_${Date.now()}`,
-      email: cleanEmail,
-      name: name?.trim() || cleanEmail.split("@")[0],
-      role: "organizer",
-      organizedEvents: [],
-      joinedEvents: [],
-      passwordHash: "default",
-    };
-    db[cleanEmail] = user;
-    saveUsersDB(db);
+  if (!cleanEmail) {
+    throw new Error("Please enter your email address.");
   }
+  if (!password) {
+    throw new Error("Please enter your password.");
+  }
+
+  const db = getUsersDB();
+  const account = db[cleanEmail];
+
+  if (!account) {
+    throw new Error("No account found with this email. Please register first.");
+  }
+
+  const hashed = btoa(password);
+  if (account.passwordHash !== hashed) {
+    throw new Error("Incorrect password. Please try again.");
+  }
+
+  const user: User = {
+    id: account.id,
+    email: account.email,
+    name: account.name,
+    role: account.role,
+    organizedEvents: account.organizedEvents || [],
+    joinedEvents: account.joinedEvents || [],
+  };
 
   setCurrentUser(user);
   return user;

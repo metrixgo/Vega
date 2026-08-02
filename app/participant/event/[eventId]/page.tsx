@@ -36,10 +36,12 @@ export default function ParticipantEventPage() {
 
   const [name, setName] = useState(queryName);
   const [phone, setPhone] = useState(queryPhone);
+  const [studentId, setStudentId] = useState<number | null>(null);
 
   const [status, setStatus] = useState<Status>("Unchecked");
   const [notices, setNotices] = useState<Notice[]>([]);
-  const [emergency, setEmergency] = useState<string | null>(null);
+  const [activeEmergency, setActiveEmergency] = useState<string | null>(null);
+  const [dismissedEmergencyText, setDismissedEmergencyText] = useState<string | null>(null);
 
   const [locationText, setLocationText] = useState("GPS Location not shared yet");
   const [report, setReport] = useState<string | null>(null);
@@ -83,12 +85,21 @@ export default function ParticipantEventPage() {
         if (isSubscribed) {
           const currentNotices: Notice[] = data.notices || [];
           setNotices(currentNotices);
-          setEmergency(data.emergency);
 
-          // Find current student status from server
-          const me = (data.students || []).find((s: { name: string; phone?: string }) => s.name.toLowerCase() === name.toLowerCase() || (phone && s.phone === phone));
+          // Emergency Alert Logic (Fixes Emergency Popup Loop Bug)
+          const serverEmergency: string | null = data.emergency || null;
+          if (serverEmergency && serverEmergency !== dismissedEmergencyText) {
+            setActiveEmergency(serverEmergency);
+          } else if (!serverEmergency) {
+            setActiveEmergency(null);
+            setDismissedEmergencyText(null); // Reset dismissed token when server clears emergency
+          }
+
+          // Find current student status & ID from server
+          const me = (data.students || []).find((s: { id: number; name: string; phone?: string }) => s.name.toLowerCase() === name.toLowerCase() || (phone && s.phone === phone));
           if (me) {
             setStatus(me.status);
+            setStudentId(me.id);
           }
 
           // Native Popup Notification for New Announcements
@@ -99,10 +110,10 @@ export default function ParticipantEventPage() {
           prevNoticeCountRef.current = currentNotices.length;
 
           // Native Popup Notification for Emergency Alert
-          if (data.emergency && data.emergency !== prevEmergencyRef.current) {
-            triggerNotification("🚨 EMERGENCY ALERT - TAKE ACTION", { body: data.emergency }, "emergency");
+          if (serverEmergency && serverEmergency !== prevEmergencyRef.current && serverEmergency !== dismissedEmergencyText) {
+            triggerNotification("🚨 EMERGENCY ALERT - TAKE ACTION", { body: serverEmergency }, "emergency");
           }
-          prevEmergencyRef.current = data.emergency;
+          prevEmergencyRef.current = serverEmergency;
         }
       } catch (err) {
         console.error("Poll error:", err);
@@ -126,7 +137,7 @@ export default function ParticipantEventPage() {
         document.removeEventListener("visibilitychange", handleVis);
       }
     };
-  }, [code, name, phone]);
+  }, [code, name, phone, dismissedEmergencyText]);
 
   const handleLocate = () => {
     if (typeof window === "undefined" || !navigator.geolocation) {
@@ -142,7 +153,7 @@ export default function ParticipantEventPage() {
           await fetch("/api/event", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "update_location", code, studentName: name, phone, location: coords }),
+            body: JSON.stringify({ action: "update_location", code, studentId, studentName: name, phone, location: coords }),
           });
         } catch {
           /* ignore */
@@ -159,7 +170,7 @@ export default function ParticipantEventPage() {
       await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_status", code, studentName: name, phone, status: nextStatus, issue: issueStr }),
+        body: JSON.stringify({ action: "update_status", code, studentId, studentName: name, phone, status: nextStatus, issue: issueStr }),
       });
     } catch {
       /* ignore */
@@ -172,8 +183,21 @@ export default function ParticipantEventPage() {
   };
 
   const handleClearEmergency = async () => {
-    setEmergency(null);
+    if (activeEmergency) {
+      setDismissedEmergencyText(activeEmergency);
+    }
+    setActiveEmergency(null);
     handleUpdateStatus("Safe");
+
+    try {
+      await fetch("/api/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clear_emergency", code }),
+      });
+    } catch {
+      /* ignore */
+    }
   };
 
   return (
@@ -284,13 +308,13 @@ export default function ParticipantEventPage() {
         </section>
       </div>
 
-      {/* Emergency Full-Screen Red Alert Modal */}
-      {emergency && (
+      {/* Emergency Full-Screen Red Alert Modal (With Permanent Dismissal Token) */}
+      {activeEmergency && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-red-600 p-5 text-center text-white animate-fade-in">
           <div className="max-w-lg">
             <p className="text-sm font-extrabold uppercase tracking-[.2em] text-red-100">HIGH PRIORITY EMERGENCY</p>
             <h2 className="mt-3 text-3xl sm:text-4xl font-extrabold tracking-tight">TAKE ACTION NOW</h2>
-            <p className="mt-5 text-lg leading-8 text-red-50 font-medium">{emergency}</p>
+            <p className="mt-5 text-lg leading-8 text-red-50 font-medium">{activeEmergency}</p>
             <button
               onClick={handleClearEmergency}
               className="mt-10 w-full rounded-xl bg-white px-6 py-4 font-bold text-red-700 shadow-xl min-h-[56px] text-lg active:scale-95 transition"

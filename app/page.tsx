@@ -11,9 +11,13 @@ export default function LandingPage() {
   const [user, setUser] = useState<User | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+
+  // Form states
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<"organizer" | "participant">("organizer");
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Guest Quick Join state
   const [joinCode, setJoinCode] = useState("");
@@ -27,17 +31,25 @@ export default function LandingPage() {
 
   const handleAuthSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    setAuthError(null);
 
-    if (authMode === "signup") {
-      const u = registerUser(email, name || email.split("@")[0], role);
-      setUser(u);
-    } else {
-      const u = loginUser(email, name);
-      setUser(u);
+    try {
+      if (authMode === "signup") {
+        const u = registerUser(email, password, name, role);
+        setUser(u);
+      } else {
+        const u = loginUser(email, password);
+        setUser(u);
+      }
+      setShowAuthModal(false);
+      router.push("/dashboard");
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setAuthError(err.message);
+      } else {
+        setAuthError("Authentication failed. Please check your credentials.");
+      }
     }
-    setShowAuthModal(false);
-    router.push("/dashboard");
   };
 
   const handleGuestCreate = async () => {
@@ -59,7 +71,6 @@ export default function LandingPage() {
     if (!joinCode.trim() || !guestName.trim()) return;
     const cleanCode = joinCode.trim().toUpperCase();
 
-    // Register participant in event
     try {
       await fetch("/api/event", {
         method: "POST",
@@ -83,7 +94,7 @@ export default function LandingPage() {
             </div>
             <div>
               <span className="font-bold text-slate-900 text-lg">Vega Safety Manager</span>
-              <span className="block text-xs text-slate-500">Real-time Group Safety & Location Sync</span>
+              <span className="block text-xs text-slate-500">Real-time Group Safety & GPS Sync</span>
             </div>
           </div>
           <div>
@@ -92,9 +103,28 @@ export default function LandingPage() {
                 Go to Dashboard →
               </Link>
             ) : (
-              <button onClick={() => setShowAuthModal(true)} className="secondary font-semibold text-sm">
-                Sign In / Register
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setAuthMode("login");
+                    setAuthError(null);
+                    setShowAuthModal(true);
+                  }}
+                  className="secondary font-semibold text-sm"
+                >
+                  Sign In
+                </button>
+                <button
+                  onClick={() => {
+                    setAuthMode("signup");
+                    setAuthError(null);
+                    setShowAuthModal(true);
+                  }}
+                  className="primary font-semibold text-sm"
+                >
+                  Register
+                </button>
+              </div>
             )}
           </div>
         </header>
@@ -119,8 +149,15 @@ export default function LandingPage() {
                 </Link>
               ) : (
                 <>
-                  <button onClick={() => setShowAuthModal(true)} className="primary px-6 py-3.5 text-base shadow-sm">
-                    Get Started / Sign In
+                  <button
+                    onClick={() => {
+                      setAuthMode("signup");
+                      setAuthError(null);
+                      setShowAuthModal(true);
+                    }}
+                    className="primary px-6 py-3.5 text-base shadow-sm"
+                  >
+                    Create Account
                   </button>
                   <button onClick={handleGuestCreate} className="secondary px-6 py-3.5 text-base">
                     Quick Create Event
@@ -160,16 +197,22 @@ export default function LandingPage() {
         </section>
       </div>
 
-      {/* Auth Modal */}
+      {/* Email + Password Auth Modal */}
       {showAuthModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl bg-white p-7 shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-slate-900">{authMode === "login" ? "Sign In to Account" : "Create Unique Account"}</h2>
+              <h2 className="text-xl font-bold text-slate-900">{authMode === "login" ? "Sign In to Account" : "Register New Account"}</h2>
               <button onClick={() => setShowAuthModal(false)} className="text-slate-400 hover:text-slate-600">
                 ✕
               </button>
             </div>
+
+            {authError && (
+              <div className="mb-4 rounded-xl bg-red-50 p-3.5 text-xs font-semibold text-red-700 ring-1 ring-red-200">
+                {authError}
+              </div>
+            )}
 
             <form onSubmit={handleAuthSubmit} className="space-y-4">
               <div>
@@ -180,6 +223,19 @@ export default function LandingPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@domain.com"
+                  className="field mt-1.5"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700">Password</label>
+                <input
+                  type="password"
+                  required
+                  minLength={4}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
                   className="field mt-1.5"
                 />
               </div>
@@ -198,7 +254,7 @@ export default function LandingPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700">Primary Role</label>
+                    <label className="block text-sm font-medium text-slate-700">Primary Account Role</label>
                     <select value={role} onChange={(e) => setRole(e.target.value as "organizer" | "participant")} className="field mt-1.5 bg-white">
                       <option value="organizer">Organizer (Manage events & participants)</option>
                       <option value="participant">Participant (Check-in & share location)</option>
@@ -207,7 +263,7 @@ export default function LandingPage() {
                 </>
               )}
 
-              <button type="submit" className="primary w-full py-3 mt-2">
+              <button type="submit" className="primary w-full py-3 mt-2 font-semibold">
                 {authMode === "login" ? "Sign In & Open Dashboard" : "Register Account"}
               </button>
             </form>
@@ -216,14 +272,26 @@ export default function LandingPage() {
               {authMode === "login" ? (
                 <p>
                   Don’t have an account?{" "}
-                  <button onClick={() => setAuthMode("signup")} className="font-semibold text-slate-900 underline">
+                  <button
+                    onClick={() => {
+                      setAuthMode("signup");
+                      setAuthError(null);
+                    }}
+                    className="font-bold text-slate-900 underline"
+                  >
                     Register
                   </button>
                 </p>
               ) : (
                 <p>
                   Already have an account?{" "}
-                  <button onClick={() => setAuthMode("login")} className="font-semibold text-slate-900 underline">
+                  <button
+                    onClick={() => {
+                      setAuthMode("login");
+                      setAuthError(null);
+                    }}
+                    className="font-bold text-slate-900 underline"
+                  >
                     Sign In
                   </button>
                 </p>
@@ -280,7 +348,7 @@ export default function LandingPage() {
                 />
               </div>
 
-              <button type="submit" className="primary w-full py-3 mt-2">
+              <button type="submit" className="primary w-full py-3 mt-2 font-semibold">
                 Join Event Now
               </button>
             </form>

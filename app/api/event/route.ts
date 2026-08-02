@@ -1,31 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-export type Status = "Safe" | "Needs help" | "Unchecked";
-
-export type Student = {
-  id: number;
-  name: string;
-  phone: string;
-  status: Status;
-  issue?: string;
-  location: [number, number];
-  lastSeen: string;
-};
-
-export type Notice = {
-  id: number;
-  text: string;
-  time: string;
-};
-
-export type EventData = {
-  code: string;
-  students: Student[];
-  notices: Notice[];
-  emergency: string | null;
-  updatedAt: number;
-  cloudObjectId?: string;
-};
+import type { EventData, Student, Status, Notice } from "@/lib/types";
 
 // Global in-memory cache for fast local access
 const globalEvents = globalThis as unknown as {
@@ -38,7 +12,55 @@ if (!globalEvents._vegaEvents) {
 
 const events = globalEvents._vegaEvents;
 
-// Helper to fetch/sync from persistent cloud storage (restful-api.dev object store)
+// Helper to find student index by ID, phone, or name
+function findStudentIndex(students: Student[], query: { id?: number; phone?: string; name?: string }): number {
+  if (query.id) {
+    const idx = students.findIndex((s) => s.id === query.id);
+    if (idx >= 0) return idx;
+  }
+  if (query.phone && query.phone.trim()) {
+    const idx = students.findIndex((s) => s.phone.trim() === query.phone?.trim());
+    if (idx >= 0) return idx;
+  }
+  if (query.name && query.name.trim()) {
+    const clean = query.name.trim().toLowerCase();
+    const idx = students.findIndex((s) => s.name.trim().toLowerCase() === clean);
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+// Helper to merge student arrays without losing participants
+function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
+  const mergedMap = new Map<string, Student>();
+
+  for (const s of existing) {
+    const key = s.id ? `id_${s.id}` : s.phone ? `phone_${s.phone}` : `name_${s.name.toLowerCase()}`;
+    mergedMap.set(key, s);
+  }
+
+  for (const s of incoming) {
+    const key = s.id ? `id_${s.id}` : s.phone ? `phone_${s.phone}` : `name_${s.name.toLowerCase()}`;
+    const prev = mergedMap.get(key);
+    if (prev) {
+      mergedMap.set(key, {
+        ...prev,
+        ...s,
+        // Preserve phone/name if incoming is empty
+        name: s.name || prev.name,
+        phone: s.phone || prev.phone,
+        location: s.location || prev.location,
+        lastSeen: s.lastSeen || "Just now",
+      });
+    } else {
+      mergedMap.set(key, s);
+    }
+  }
+
+  return Array.from(mergedMap.values());
+}
+
+// Helper to fetch/sync from persistent cloud storage
 async function fetchCloudEvent(code: string): Promise<EventData | null> {
   try {
     const res = await fetch(`https://api.restful-api.dev/objects`, { cache: "no-store" });
@@ -48,12 +70,17 @@ async function fetchCloudEvent(code: string): Promise<EventData | null> {
 
     const match = items.find((item: { name?: string }) => item.name === `VEGA_EVENT_${code}`);
     if (match && match.data) {
+      const existingInMemory = events.get(code);
+
+      const cloudStudents: Student[] = match.data.students || [];
+      const combinedStudents = existingInMemory ? mergeStudents(cloudStudents, existingInMemory.students) : cloudStudents;
+
       const data: EventData = {
         code,
-        students: match.data.students || [],
-        notices: match.data.notices || [],
-        emergency: match.data.emergency || null,
-        updatedAt: match.data.updatedAt || Date.now(),
+        students: combinedStudents,
+        notices: match.data.notices || (existingInMemory ? existingInMemory.notices : []),
+        emergency: match.data.emergency !== undefined ? match.data.emergency : existingInMemory ? existingInMemory.emergency : null,
+        updatedAt: Math.max(match.data.updatedAt || 0, existingInMemory?.updatedAt || Date.now()),
         cloudObjectId: match.id,
       };
       events.set(code, data);
@@ -122,8 +149,7 @@ export async function GET(request: NextRequest) {
   const code = (searchParams.get("code") || "VEGA-MAIN").toUpperCase();
 
   let event = events.get(code);
-  // Try cloud fetch if missing or older than 5s
-  if (!event || Date.now() - event.updatedAt > 5000) {
+  if (!event || Date.now() - event.updatedAt > 4000) {
     const cloudData = await fetchCloudEvent(code);
     if (cloudData) {
       event = cloudData;
@@ -138,7 +164,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, code: rawCode } = body;
+    const { action, code: rawCode, studentId, studentName, name, phone, location, status, issue, text } = body;
     const code = (rawCode || "VEGA-MAIN").toUpperCase();
 
     let event = events.get(code);
@@ -148,27 +174,31 @@ export async function POST(request: NextRequest) {
 
     event.updatedAt = Date.now();
 
+    const targetName = name || studentName || "";
+    const targetPhone = phone || "";
+    const targetId = typeof studentId === "number" ? studentId : undefined;
+
     if (action === "create") {
       event.students = [];
       event.notices = [];
       event.emergency = null;
     } else if (action === "join") {
-      const { name, phone, location } = body;
-      const existingIndex = event.students.findIndex((s) => s.name.toLowerCase() === (name || "").toLowerCase() || s.phone === phone);
+      const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
       const studentLoc: [number, number] = location || [37.7749, -122.4194];
 
-      if (existingIndex >= 0) {
-        event.students[existingIndex] = {
-          ...event.students[existingIndex],
-          phone: phone || event.students[existingIndex].phone,
+      if (idx >= 0) {
+        event.students[idx] = {
+          ...event.students[idx],
+          name: targetName || event.students[idx].name,
+          phone: targetPhone || event.students[idx].phone,
           location: studentLoc,
           lastSeen: "Just now",
         };
       } else {
         const newStudent: Student = {
-          id: Date.now() + Math.floor(Math.random() * 1000),
-          name: name || "Anonymous Participant",
-          phone: phone || "",
+          id: targetId || Date.now() + Math.floor(Math.random() * 1000),
+          name: targetName || "Anonymous Participant",
+          phone: targetPhone,
           status: "Unchecked",
           location: studentLoc,
           lastSeen: "Just now",
@@ -176,39 +206,59 @@ export async function POST(request: NextRequest) {
         event.students.push(newStudent);
       }
     } else if (action === "update_status") {
-      const { studentName, phone, status, issue, location } = body;
-      const index = event.students.findIndex((s) => s.name.toLowerCase() === (studentName || "").toLowerCase() || (phone && s.phone === phone));
-      if (index >= 0) {
-        event.students[index].status = status;
-        event.students[index].issue = issue || undefined;
-        event.students[index].lastSeen = "Just now";
-        if (location) event.students[index].location = location;
+      const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
+      const studentLoc: [number, number] = location || [37.7749, -122.4194];
+
+      if (idx >= 0) {
+        event.students[idx].status = status || event.students[idx].status;
+        event.students[idx].issue = issue !== undefined ? issue : event.students[idx].issue;
+        if (location) event.students[idx].location = location;
+        event.students[idx].lastSeen = "Just now";
+      } else {
+        // Robust Upsert: If student not found on status update, create them so they are NEVER lost
+        event.students.push({
+          id: targetId || Date.now() + Math.floor(Math.random() * 1000),
+          name: targetName || "Participant",
+          phone: targetPhone,
+          status: status || "Unchecked",
+          issue,
+          location: studentLoc,
+          lastSeen: "Just now",
+        });
       }
     } else if (action === "update_location") {
-      const { studentName, phone, location } = body;
-      const index = event.students.findIndex((s) => s.name.toLowerCase() === (studentName || "").toLowerCase() || (phone && s.phone === phone));
-      if (index >= 0 && location) {
-        event.students[index].location = location;
-        event.students[index].lastSeen = "Just now";
+      const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
+      const studentLoc: [number, number] = location || [37.7749, -122.4194];
+
+      if (idx >= 0) {
+        if (location) event.students[idx].location = location;
+        event.students[idx].lastSeen = "Just now";
+      } else {
+        // Robust Upsert: If student not found on GPS update, add them immediately!
+        event.students.push({
+          id: targetId || Date.now() + Math.floor(Math.random() * 1000),
+          name: targetName || "Participant",
+          phone: targetPhone,
+          status: "Unchecked",
+          location: studentLoc,
+          lastSeen: "Just now",
+        });
       }
     } else if (action === "notice") {
-      const { text } = body;
       if (text) {
         const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
         event.notices.unshift({ id: Date.now(), text, time: timeStr });
       }
     } else if (action === "emergency") {
-      const { text } = body;
       event.emergency = text || null;
     } else if (action === "clear_emergency") {
       event.emergency = null;
     } else if (action === "mark_safe") {
-      const { studentId } = body;
-      const index = event.students.findIndex((s) => s.id === studentId);
-      if (index >= 0) {
-        event.students[index].status = "Safe";
-        event.students[index].issue = undefined;
-        event.students[index].lastSeen = "Just now";
+      const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
+      if (idx >= 0) {
+        event.students[idx].status = "Safe";
+        event.students[idx].issue = undefined;
+        event.students[idx].lastSeen = "Just now";
       }
     } else if (action === "reset") {
       event.students = [];
