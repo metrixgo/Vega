@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "leaflet/dist/leaflet.css";
+import ClientReset from "@/app/ClientReset";
 
 export const metadata: Metadata = {
   title: "Vega Safety Manager",
@@ -22,7 +23,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className="antialiased selection:bg-slate-800 selection:text-white bg-slate-50 min-h-screen">{children}</body>
+      <body className="antialiased selection:bg-slate-800 selection:text-white bg-slate-50 min-h-screen">
+        <ClientReset />
+        {children}
+      </body>
     </html>
   );
 }
