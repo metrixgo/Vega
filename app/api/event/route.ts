@@ -214,6 +214,12 @@ export async function POST(request: NextRequest) {
       event.students = [];
       event.notices = [];
       event.emergency = null;
+    } else if (action === "delete") {
+      events.delete(code);
+      if (event.cloudObjectId) {
+        fetch(`https://api.restful-api.dev/objects/${event.cloudObjectId}`, { method: "DELETE" }).catch(() => {});
+      }
+      return NextResponse.json({ success: true, deleted: code });
     }
 
     events.set(code, event);

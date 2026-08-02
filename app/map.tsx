@@ -3,7 +3,7 @@
 import L from "leaflet";
 import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import { useEffect } from "react";
-import type { Student, Status } from "./page";
+import type { Student, Status } from "@/lib/types";
 
 const colors: Record<Status, string> = { Safe: "#10b981", "Needs help": "#ef4444", Unchecked: "#94a3b8" };
 
