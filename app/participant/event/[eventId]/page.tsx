@@ -80,7 +80,7 @@ export default function ParticipantEventPage() {
     }
   };
 
-  // Poll server for event status with Client LocalStorage Auto-Rehydration
+  // Poll server for event status
   useEffect(() => {
     if (!name) return;
     let isSubscribed = true;
@@ -192,11 +192,17 @@ export default function ParticipantEventPage() {
           prevEmergencyRef.current = serverEmergency;
 
           // Check for incoming private messages from Organizer
-          const incomingOrgMsgs = currentMsgs.filter(
-            (m) =>
-              m.senderId === "organizer" &&
-              (studentId ? m.recipientId === String(studentId) : m.recipientId === name || m.recipientId === phone)
-          );
+          const incomingOrgMsgs = currentMsgs.filter((m) => {
+            if (m.senderId !== "organizer") return false;
+            const sid = studentId ? String(studentId) : "";
+            const sName = name.toLowerCase();
+            return (
+              (sid && m.recipientId === sid) ||
+              m.recipientId.toLowerCase() === sName ||
+              (phone && m.recipientId === phone)
+            );
+          });
+
           if (incomingOrgMsgs.length > prevMessageCountRef.current && prevMessageCountRef.current > 0) {
             const latest = incomingOrgMsgs[incomingOrgMsgs.length - 1];
             triggerNotification("💬 Private Message from Organizer", { body: latest.text }, "notice");
@@ -227,20 +233,31 @@ export default function ParticipantEventPage() {
     };
   }, [code, name, phone, dismissedEmergencyText, studentId, router]);
 
+  // Robust Message Filter for Participant
   const participantMessages = useMemo(() => {
-    return messages.filter(
-      (m) =>
-        (m.senderId === "organizer" && (studentId ? m.recipientId === String(studentId) : m.recipientId === name || m.recipientId === phone)) ||
-        (m.recipientId === "organizer" && (studentId ? m.senderId === String(studentId) : m.senderId === name || m.senderId === phone))
-    );
+    const sid = studentId ? String(studentId) : "";
+    const sName = name.toLowerCase();
+
+    return messages.filter((m) => {
+      const matchFromOrg =
+        m.senderId === "organizer" &&
+        ((sid && m.recipientId === sid) || m.recipientId.toLowerCase() === sName || (phone && m.recipientId === phone));
+      const matchToOrg =
+        m.recipientId === "organizer" &&
+        ((sid && m.senderId === sid) || m.senderName.toLowerCase() === sName || (phone && m.senderId === phone));
+      return matchFromOrg || matchToOrg;
+    });
   }, [messages, studentId, name, phone]);
 
   const unreadCount = useMemo(() => {
+    const sid = studentId ? String(studentId) : "";
+    const sName = name.toLowerCase();
+
     return messages.filter(
       (m) =>
         !m.read &&
         m.senderId === "organizer" &&
-        (studentId ? m.recipientId === String(studentId) : m.recipientId === name || m.recipientId === phone)
+        ((sid && m.recipientId === sid) || m.recipientId.toLowerCase() === sName || (phone && m.recipientId === phone))
     ).length;
   }, [messages, studentId, name, phone]);
 
@@ -284,7 +301,7 @@ export default function ParticipantEventPage() {
 
   const handleConfirmCheckIn = async () => {
     setStatus("Safe");
-    setHasConfirmedCheckIn(true); // Hides Check-In Banner immediately
+    setHasConfirmedCheckIn(true);
     try {
       await fetch("/api/event", {
         method: "POST",
@@ -299,10 +316,9 @@ export default function ParticipantEventPage() {
   const handleNeedHelp = (issue: string) => {
     setReport(issue);
     handleUpdateStatus("Needs help", issue);
-    setShowChatModal(true); // Open private chat with organizer immediately
+    setShowChatModal(true);
   };
 
-  // Atomic Clear Emergency (Fixes Race Condition Bug & Adds Dual Options)
   const handleClearEmergency = async (responseOption: "safe" | "help") => {
     if (activeEmergency) {
       setDismissedEmergencyText(activeEmergency);
@@ -328,7 +344,6 @@ export default function ParticipantEventPage() {
         /* ignore */
       }
     } else {
-      // Participant tapped "I NEED HELP"
       setStatus("Needs help");
       handleNeedHelp("Emergency Alert Assistance Needed");
     }
@@ -426,7 +441,7 @@ export default function ParticipantEventPage() {
           </div>
         </div>
 
-        {/* Check-In Request Banner (Disappears after confirming) */}
+        {/* Check-In Request Banner */}
         {checkInReq && checkInReq.active && !hasConfirmedCheckIn && (
           <section className="mt-6 rounded-2xl bg-emerald-600 text-white p-6 shadow-md border border-emerald-500 animate-pulse">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

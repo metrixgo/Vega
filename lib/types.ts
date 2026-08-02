@@ -27,9 +27,9 @@ export type CheckInRequest = {
 
 export type ChatMessage = {
   id: number;
-  senderId: string; // "organizer" or student name/phone/id
+  senderId: string; // "organizer" or student.id / name / phone
   senderName: string;
-  recipientId: string; // "organizer" or student name/phone/id
+  recipientId: string; // "organizer" or student.id / name / phone
   text: string;
   time: string;
   read: boolean;
@@ -50,3 +50,11 @@ export type EventData = {
   updatedAt: number;
   cloudObjectId?: string;
 };
+
+export function getCaliforniaTime(): string {
+  return new Date().toLocaleTimeString("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}

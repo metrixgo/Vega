@@ -29,6 +29,29 @@ function Badge({ status }: { status: Status }) {
   );
 }
 
+const EMERGENCY_TEMPLATES = [
+  {
+    type: "Earthquake",
+    icon: "🌐",
+    text: "EARTHQUAKE ALERT: Drop, Cover, and Hold On! Stay away from windows and heavy furniture. Move to open safe areas if outdoors.",
+  },
+  {
+    type: "Typhoon / Severe Storm",
+    icon: "🌀",
+    text: "TYPHOON ALERT: Seek immediate indoor shelter in a sturdy building. Stay away from windows and exterior doors.",
+  },
+  {
+    type: "Active Threat / Gunshots",
+    icon: "🚨",
+    text: "ACTIVE THREAT ALERT: Run, Hide, Fight! Lock doors, turn off lights, remain silent, and silence all mobile devices.",
+  },
+  {
+    type: "Chaotic Evacuation",
+    icon: "⚠️",
+    text: "EMERGENCY EVACUATION: Please proceed immediately and calmly to the designated primary assembly point.",
+  },
+];
+
 export default function OrganizerEventPage() {
   const params = useParams();
   const router = useRouter();
@@ -46,8 +69,12 @@ export default function OrganizerEventPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const [noticeText, setNoticeText] = useState("");
-  const [alertText, setAlertText] = useState("Please go calmly to the designated assembly point.");
+
+  // Emergency Modal State
   const [showAlertModal, setShowAlertModal] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("Earthquake");
+  const [customEmergencyType, setCustomEmergencyType] = useState("");
+  const [alertText, setAlertText] = useState(EMERGENCY_TEMPLATES[0].text);
 
   // Private Chat State
   const [chatInputText, setChatInputText] = useState("");
@@ -191,13 +218,18 @@ export default function OrganizerEventPage() {
 
   const selected = useMemo(() => students.find((s) => s.id === selectedId) || students[0] || null, [students, selectedId]);
 
+  // Robust Private Message Filter
   const selectedChatMessages = useMemo(() => {
     if (!selected) return [];
-    return messages.filter(
-      (m) =>
-        (m.senderId === String(selected.id) || m.senderId === selected.name || m.senderId === selected.phone) ||
-        (m.recipientId === String(selected.id) || m.recipientId === selected.name || m.recipientId === selected.phone)
-    );
+    const sid = String(selected.id);
+    const sName = selected.name.toLowerCase();
+    const sPhone = selected.phone;
+
+    return messages.filter((m) => {
+      const matchSender = m.senderId === sid || m.senderName.toLowerCase() === sName || (sPhone && m.senderId === sPhone);
+      const matchRecipient = m.recipientId === sid || m.recipientId.toLowerCase() === sName || (sPhone && m.recipientId === sPhone);
+      return matchSender || matchRecipient;
+    });
   }, [messages, selected]);
 
   const visible = useMemo(
@@ -209,12 +241,21 @@ export default function OrganizerEventPage() {
   const checkedInCount = useMemo(() => students.filter((s) => s.checkedInAt && s.status === "Safe").length, [students]);
 
   const unreadMessageCount = (student: Student) => {
+    const sid = String(student.id);
+    const sName = student.name.toLowerCase();
+    const sPhone = student.phone;
     return messages.filter(
       (m) =>
         !m.read &&
         m.recipientId === "organizer" &&
-        (m.senderId === String(student.id) || m.senderId === student.name || m.senderId === student.phone)
+        (m.senderId === sid || m.senderName.toLowerCase() === sName || (sPhone && m.senderId === sPhone))
     ).length;
+  };
+
+  const handleSelectTemplate = (template: typeof EMERGENCY_TEMPLATES[0]) => {
+    setSelectedTemplate(template.type);
+    setCustomEmergencyType("");
+    setAlertText(template.text);
   };
 
   const handleSendNotice = async () => {
@@ -302,13 +343,16 @@ export default function OrganizerEventPage() {
 
   const handleDeclareEmergency = async () => {
     setShowAlertModal(false);
+    const emergencyType = customEmergencyType.trim() || selectedTemplate;
+    const fullEmergencyPayload = `[${emergencyType.toUpperCase()}] ${alertText.trim()}`;
+
     try {
       await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "emergency", code, text: alertText }),
+        body: JSON.stringify({ action: "emergency", code, text: fullEmergencyPayload }),
       });
-      triggerNotification("🚨 EMERGENCY DECLARED", { body: alertText }, "emergency");
+      triggerNotification(`🚨 ${emergencyType.toUpperCase()} EMERGENCY DECLARED`, { body: alertText }, "emergency");
     } catch {
       /* ignore */
     }
@@ -722,20 +766,61 @@ export default function OrganizerEventPage() {
         </div>
       )}
 
-      {/* Emergency Modal */}
+      {/* Emergency Modal with Pre-Made Templates & Custom Type */}
       {showAlertModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-            <p className="text-sm font-bold text-red-600 uppercase tracking-wider">HIGH PRIORITY EMERGENCY ALERT</p>
-            <h2 className="mt-2 text-2xl font-bold text-slate-900">Declare an Emergency?</h2>
-            <p className="mt-1 text-xs text-slate-500">This will trigger full-screen red alert screens, audio tones, and native push notifications on all participant devices.</p>
-            <textarea value={alertText} onChange={(e) => setAlertText(e.target.value)} className="field mt-4 min-h-24 resize-none" />
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <p className="text-xs font-bold text-red-600 uppercase tracking-wider">HIGH PRIORITY EMERGENCY ALERT</p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-900">Declare an Emergency</h2>
+            <p className="mt-1 text-xs text-slate-500">Select a pre-made template or specify a custom emergency type.</p>
+
+            <div className="mt-4">
+              <label className="block text-xs font-semibold text-slate-700 mb-2">Pre-Made Emergency Templates</label>
+              <div className="grid grid-cols-2 gap-2">
+                {EMERGENCY_TEMPLATES.map((tmpl) => (
+                  <button
+                    key={tmpl.type}
+                    type="button"
+                    onClick={() => handleSelectTemplate(tmpl)}
+                    className={`p-2.5 rounded-xl border text-left text-xs font-semibold transition ${
+                      selectedTemplate === tmpl.type && !customEmergencyType
+                        ? "border-red-500 bg-red-50 text-red-700 shadow-xs"
+                        : "border-slate-200 hover:border-slate-300 text-slate-700"
+                    }`}
+                  >
+                    <span className="mr-1.5">{tmpl.icon}</span>
+                    {tmpl.type}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <label className="block text-xs font-semibold text-slate-700">Custom Emergency Type (Optional)</label>
+              <input
+                type="text"
+                value={customEmergencyType}
+                onChange={(e) => setCustomEmergencyType(e.target.value)}
+                placeholder="e.g. Chemical Leak / Power Failure"
+                className="field mt-1 text-xs"
+              />
+            </div>
+
+            <div className="mt-3">
+              <label className="block text-xs font-semibold text-slate-700">Emergency Alert Message</label>
+              <textarea
+                value={alertText}
+                onChange={(e) => setAlertText(e.target.value)}
+                className="field mt-1 min-h-20 text-xs resize-none"
+              />
+            </div>
+
             <div className="mt-5 flex gap-3">
-              <button onClick={() => setShowAlertModal(false)} className="secondary flex-1">
+              <button onClick={() => setShowAlertModal(false)} className="secondary flex-1 text-xs">
                 Cancel
               </button>
-              <button onClick={handleDeclareEmergency} className="danger flex-1 bg-red-600 hover:bg-red-700 font-bold">
-                Send Alert
+              <button onClick={handleDeclareEmergency} className="danger flex-1 bg-red-600 hover:bg-red-700 text-xs font-bold py-3">
+                Broadcast Emergency Alert
               </button>
             </div>
           </div>

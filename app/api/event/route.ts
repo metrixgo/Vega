@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import type { EventData, Student, Status, Notice, CheckInRequest, ChatMessage } from "@/lib/types";
+import { getCaliforniaTime } from "@/lib/types";
 import { sendPushToEvent } from "@/lib/push-server";
 
 // Global in-memory cache for fast local access
@@ -105,6 +106,22 @@ function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
   return Array.from(mergedMap.values());
 }
 
+function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const msgMap = new Map<number, ChatMessage>();
+  for (const m of existing) {
+    msgMap.set(m.id, m);
+  }
+  for (const m of incoming) {
+    if (!msgMap.has(m.id)) {
+      msgMap.set(m.id, m);
+    } else {
+      const prev = msgMap.get(m.id)!;
+      msgMap.set(m.id, { ...prev, read: prev.read || m.read });
+    }
+  }
+  return Array.from(msgMap.values()).sort((a, b) => a.id - b.id);
+}
+
 export async function GET(request: NextRequest) {
   loadDiskEvents();
   const { searchParams } = new URL(request.url);
@@ -150,7 +167,7 @@ export async function POST(request: NextRequest) {
       eventData,
     } = body;
 
-    const code = (rawCode || "VEGA-MAIN").toUpperCase();
+    const code = (rawCode || "8492").toUpperCase();
     let event: EventData | null | undefined = events.get(code);
 
     // Action: RESTORE
@@ -164,7 +181,7 @@ export async function POST(request: NextRequest) {
           maxParticipants: eventData.maxParticipants || 20,
           students: mergeStudents(event?.students || [], eventData.students || []),
           notices: eventData.notices || [],
-          messages: eventData.messages || [],
+          messages: mergeMessages(event?.messages || [], eventData.messages || []),
           emergency: eventData.emergency || null,
           checkInRequest: eventData.checkInRequest || null,
           deleted: false,
@@ -208,6 +225,7 @@ export async function POST(request: NextRequest) {
     const targetName = name || studentName || "";
     const targetPhone = phone || "";
     const targetId = typeof studentId === "number" ? studentId : undefined;
+    const currentTimeStr = getCaliforniaTime();
 
     if (action === "join") {
       const existingIdx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
@@ -246,14 +264,13 @@ export async function POST(request: NextRequest) {
       }
     } else if (action === "send_message") {
       if (text && senderId && recipientId) {
-        const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
         const newMsg: ChatMessage = {
           id: Date.now(),
           senderId: String(senderId),
           senderName: senderName || "User",
           recipientId: String(recipientId),
           text: text.trim(),
-          time: timeStr,
+          time: currentTimeStr,
           read: false,
         };
         event.messages.push(newMsg);
@@ -325,19 +342,17 @@ export async function POST(request: NextRequest) {
       event.checkInRequest = req;
     } else if (action === "confirm_check_in") {
       const idx = findStudentIndex(event.students, { id: targetId, phone: targetPhone, name: targetName });
-      const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
       if (idx >= 0) {
         event.students[idx].status = "Safe";
         event.students[idx].issue = undefined;
-        event.students[idx].checkedInAt = timeStr;
+        event.students[idx].checkedInAt = currentTimeStr;
         event.students[idx].lastSeen = "Just now";
       }
     } else if (action === "clear_check_in") {
       event.checkInRequest = null;
     } else if (action === "notice") {
       if (text) {
-        const timeStr = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-        event.notices.unshift({ id: Date.now(), text, time: timeStr });
+        event.notices.unshift({ id: Date.now(), text, time: currentTimeStr });
 
         // Send 24/7 background push notification to all participants
         sendPushToEvent(code, {
@@ -370,7 +385,7 @@ export async function POST(request: NextRequest) {
       if (idx >= 0) {
         event.students[idx].status = "Safe";
         event.students[idx].issue = undefined;
-        event.students[idx].checkedInAt = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        event.students[idx].checkedInAt = currentTimeStr;
         event.students[idx].lastSeen = "Just now";
       }
     } else if (action === "reset") {
