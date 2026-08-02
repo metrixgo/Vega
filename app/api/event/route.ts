@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "fs";
+import path from "path";
+import os from "os";
 import type { EventData, Student, Status, Notice, CheckInRequest } from "@/lib/types";
 
 // Global in-memory cache for fast local access
 const globalEvents = globalThis as unknown as {
   _vegaEvents?: Map<string, EventData>;
+  _vegaDiskLoaded?: boolean;
 };
 
 if (!globalEvents._vegaEvents) {
@@ -11,6 +15,52 @@ if (!globalEvents._vegaEvents) {
 }
 
 const events = globalEvents._vegaEvents;
+
+// Helper to determine persistent storage file path
+function getStoragePath(): string {
+  try {
+    const dataDir = path.join(process.cwd(), "data");
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, "vega_events.json");
+  } catch {
+    return path.join(os.tmpdir(), "vega_events.json");
+  }
+}
+
+// Load events from persistent disk storage
+function loadDiskEvents() {
+  if (globalEvents._vegaDiskLoaded) return;
+  try {
+    const filePath = getStoragePath();
+    if (fs.existsSync(filePath)) {
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const parsed: Record<string, EventData> = JSON.parse(raw);
+      for (const [code, data] of Object.entries(parsed)) {
+        events.set(code, data);
+      }
+    }
+  } catch (err) {
+    console.error("Failed to load disk events:", err);
+  } finally {
+    globalEvents._vegaDiskLoaded = true;
+  }
+}
+
+// Save events to persistent disk storage
+function saveDiskEvents() {
+  try {
+    const filePath = getStoragePath();
+    const obj: Record<string, EventData> = {};
+    for (const [code, data] of events.entries()) {
+      obj[code] = data;
+    }
+    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Failed to save disk events:", err);
+  }
+}
 
 function findStudentIndex(students: Student[], query: { id?: number; phone?: string; name?: string }): number {
   if (query.id) {
@@ -57,113 +107,12 @@ function mergeStudents(existing: Student[], incoming: Student[]): Student[] {
   return Array.from(mergedMap.values());
 }
 
-async function fetchCloudEvent(code: string): Promise<EventData | null> {
-  try {
-    const res = await fetch(`https://api.restful-api.dev/objects`, { cache: "no-store" });
-    if (!res.ok) return null;
-    const items = await res.json();
-    if (!Array.isArray(items)) return null;
-
-    const match = items.find((item: { name?: string }) => item.name === `VEGA_EVENT_${code}`);
-    if (match && match.data) {
-      const existingInMemory = events.get(code);
-      const cloudStudents: Student[] = match.data.students || [];
-      const combinedStudents = existingInMemory ? mergeStudents(cloudStudents, existingInMemory.students) : cloudStudents;
-
-      const data: EventData = {
-        code,
-        name: match.data.name || existingInMemory?.name || "Group Safety Event",
-        description: match.data.description || existingInMemory?.description || "",
-        category: match.data.category || existingInMemory?.category || "General",
-        maxParticipants: match.data.maxParticipants || existingInMemory?.maxParticipants || 20,
-        students: combinedStudents,
-        notices: match.data.notices || (existingInMemory ? existingInMemory.notices : []),
-        emergency: match.data.emergency !== undefined ? match.data.emergency : existingInMemory ? existingInMemory.emergency : null,
-        checkInRequest: match.data.checkInRequest !== undefined ? match.data.checkInRequest : existingInMemory ? existingInMemory.checkInRequest : null,
-        deleted: match.data.deleted || existingInMemory?.deleted || false,
-        updatedAt: Math.max(match.data.updatedAt || 0, existingInMemory?.updatedAt || Date.now()),
-        cloudObjectId: match.id,
-      };
-      events.set(code, data);
-      return data;
-    }
-  } catch (err) {
-    console.error("Cloud fetch error:", err);
-  }
-  return null;
-}
-
-async function saveCloudEvent(data: EventData): Promise<void> {
-  try {
-    const payload = {
-      name: `VEGA_EVENT_${data.code}`,
-      data: {
-        code: data.code,
-        name: data.name,
-        description: data.description,
-        category: data.category,
-        maxParticipants: data.maxParticipants,
-        students: data.students,
-        notices: data.notices,
-        emergency: data.emergency,
-        checkInRequest: data.checkInRequest,
-        deleted: data.deleted || false,
-        updatedAt: data.updatedAt,
-      },
-    };
-
-    if (data.cloudObjectId) {
-      await fetch(`https://api.restful-api.dev/objects/${data.cloudObjectId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        cache: "no-store",
-      });
-    } else {
-      const res = await fetch(`https://api.restful-api.dev/objects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        cache: "no-store",
-      });
-      if (res.ok) {
-        const created = await res.json();
-        data.cloudObjectId = created.id;
-      }
-    }
-  } catch (err) {
-    console.error("Cloud save error:", err);
-  }
-}
-
-function getOrCreateEvent(code: string): EventData {
-  let event = events.get(code);
-  if (!event) {
-    event = {
-      code,
-      name: "Group Safety Event",
-      category: "General",
-      maxParticipants: 20,
-      students: [],
-      notices: [],
-      emergency: null,
-      checkInRequest: null,
-      deleted: false,
-      updatedAt: Date.now(),
-    };
-    events.set(code, event);
-  }
-  return event;
-}
-
 export async function GET(request: NextRequest) {
+  loadDiskEvents();
   const { searchParams } = new URL(request.url);
   const code = (searchParams.get("code") || "VEGA-MAIN").toUpperCase();
 
-  let event: EventData | null | undefined = events.get(code);
-  if (!event) {
-    event = await fetchCloudEvent(code);
-  }
+  const event = events.get(code);
 
   if (!event || event.deleted) {
     return NextResponse.json({ error: "Event code does not exist.", deleted: true }, { status: 404 });
@@ -173,6 +122,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  loadDiskEvents();
   try {
     const body = await request.json();
     const {
@@ -192,13 +142,32 @@ export async function POST(request: NextRequest) {
       text,
       checkInTitle,
       scheduledTime,
+      eventData, // Cached payload for restore action
     } = body;
 
     const code = (rawCode || "VEGA-MAIN").toUpperCase();
-
     let event: EventData | null | undefined = events.get(code);
-    if (!event) {
-      event = (await fetchCloudEvent(code)) || null;
+
+    // Action: RESTORE (re-hydrates event from client cache if missing from server RAM/disk)
+    if (action === "restore" && eventData) {
+      if (!event || !event.deleted) {
+        event = {
+          code,
+          name: eventData.name || "Group Safety Event",
+          description: eventData.description || "",
+          category: eventData.category || "General",
+          maxParticipants: eventData.maxParticipants || 20,
+          students: mergeStudents(event?.students || [], eventData.students || []),
+          notices: eventData.notices || [],
+          emergency: eventData.emergency || null,
+          checkInRequest: eventData.checkInRequest || null,
+          deleted: false,
+          updatedAt: Date.now(),
+        };
+        events.set(code, event);
+        saveDiskEvents();
+      }
+      return NextResponse.json(event);
     }
 
     // Action: CREATE
@@ -217,7 +186,7 @@ export async function POST(request: NextRequest) {
         updatedAt: Date.now(),
       };
       events.set(code, event);
-      saveCloudEvent(event);
+      saveDiskEvents();
       return NextResponse.json(event);
     }
 
@@ -347,6 +316,7 @@ export async function POST(request: NextRequest) {
       if (idx >= 0) {
         event.students[idx].status = "Safe";
         event.students[idx].issue = undefined;
+        event.students[idx].checkedInAt = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
         event.students[idx].lastSeen = "Just now";
       }
     } else if (action === "reset") {
@@ -361,15 +331,12 @@ export async function POST(request: NextRequest) {
       event.emergency = null;
       event.checkInRequest = null;
       events.set(code, event);
-
-      if (event.cloudObjectId) {
-        fetch(`https://api.restful-api.dev/objects/${event.cloudObjectId}`, { method: "DELETE" }).catch(() => {});
-      }
+      saveDiskEvents();
       return NextResponse.json({ success: true, deleted: true, code });
     }
 
     events.set(code, event);
-    saveCloudEvent(event);
+    saveDiskEvents();
 
     return NextResponse.json(event);
   } catch (error) {

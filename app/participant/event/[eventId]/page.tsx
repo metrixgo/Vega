@@ -75,7 +75,7 @@ export default function ParticipantEventPage() {
     }
   };
 
-  // Poll server for event status & notices
+  // Poll server for event status with Client LocalStorage Auto-Rehydration
   useEffect(() => {
     if (!name) return;
     let isSubscribed = true;
@@ -86,16 +86,49 @@ export default function ParticipantEventPage() {
         const res = await fetch(`/api/event?code=${encodeURIComponent(code)}`);
         if (!res.ok) {
           const errData = await res.json();
+
           if (errData.deleted) {
+            if (typeof window !== "undefined") {
+              localStorage.removeItem(`vega_cache_event_${code}`);
+            }
             alert("This event has been deleted by the organizer.");
             removeJoinedEventFromUser(code);
             router.push("/dashboard");
             return;
           }
+
+          // Auto-rehydrate if missing from server RAM
+          if (typeof window !== "undefined") {
+            const cached = localStorage.getItem(`vega_cache_event_${code}`);
+            if (cached) {
+              try {
+                const parsed: EventData = JSON.parse(cached);
+                const restoreRes = await fetch("/api/event", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "restore", code, eventData: parsed }),
+                });
+                if (restoreRes.ok && isSubscribed) {
+                  const restored: EventData = await restoreRes.json();
+                  setEventData(restored);
+                  setNotices(restored.notices || []);
+                  setCheckInReq(restored.checkInRequest || null);
+                  return;
+                }
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          return;
         }
+
         const data: EventData = await res.json();
 
         if (data.deleted) {
+          if (typeof window !== "undefined") {
+            localStorage.removeItem(`vega_cache_event_${code}`);
+          }
           alert("This event has been deleted by the organizer.");
           removeJoinedEventFromUser(code);
           router.push("/dashboard");
@@ -107,6 +140,11 @@ export default function ParticipantEventPage() {
           const currentNotices: Notice[] = data.notices || [];
           setNotices(currentNotices);
           setCheckInReq(data.checkInRequest || null);
+
+          // Save to local cache
+          if (typeof window !== "undefined") {
+            localStorage.setItem(`vega_cache_event_${code}`, JSON.stringify(data));
+          }
 
           // Emergency Alert Logic
           const serverEmergency: string | null = data.emergency || null;
@@ -245,6 +283,10 @@ export default function ParticipantEventPage() {
 
   const handleLeaveEvent = async () => {
     if (!confirm("Are you sure you want to leave this event session?")) return;
+
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(`vega_cache_event_${code}`);
+    }
 
     try {
       await fetch("/api/event", {

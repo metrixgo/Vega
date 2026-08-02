@@ -68,7 +68,7 @@ export default function OrganizerEventPage() {
     }
   };
 
-  // Poll server for live event data
+  // Poll server for live event data with Client LocalStorage Auto-Rehydration
   useEffect(() => {
     let isSubscribed = true;
 
@@ -78,13 +78,44 @@ export default function OrganizerEventPage() {
         const res = await fetch(`/api/event?code=${encodeURIComponent(code)}`);
         if (!res.ok) {
           const errData = await res.json();
+
           if (errData.deleted) {
+            if (typeof window !== "undefined") {
+              localStorage.removeItem(`vega_cache_event_${code}`);
+            }
             alert("This event has been deleted.");
             removeOrganizedEventFromUser(code);
             router.push("/dashboard");
             return;
           }
+
+          // Auto-rehydrate if missing from server RAM
+          if (typeof window !== "undefined") {
+            const cached = localStorage.getItem(`vega_cache_event_${code}`);
+            if (cached) {
+              try {
+                const parsed: EventData = JSON.parse(cached);
+                const restoreRes = await fetch("/api/event", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "restore", code, eventData: parsed }),
+                });
+                if (restoreRes.ok && isSubscribed) {
+                  const restored: EventData = await restoreRes.json();
+                  setEventData(restored);
+                  setStudents(restored.students || []);
+                  setNotices(restored.notices || []);
+                  setCheckInReq(restored.checkInRequest || null);
+                  return;
+                }
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          return;
         }
+
         const data: EventData = await res.json();
         if (isSubscribed) {
           setEventData(data);
@@ -92,6 +123,11 @@ export default function OrganizerEventPage() {
           setStudents(currentStudents);
           setNotices(data.notices || []);
           setCheckInReq(data.checkInRequest || null);
+
+          // Save to local cache
+          if (typeof window !== "undefined") {
+            localStorage.setItem(`vega_cache_event_${code}`, JSON.stringify(data));
+          }
 
           // Check for newly reported help requests
           const helpStudents = currentStudents.filter((s) => s.status === "Needs help");
@@ -225,6 +261,10 @@ export default function OrganizerEventPage() {
 
   const handleDeleteEvent = async () => {
     if (!confirm(`Are you sure you want to delete event ${code}? This will remove it permanently for all participants.`)) return;
+
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(`vega_cache_event_${code}`);
+    }
 
     try {
       await fetch("/api/event", {
