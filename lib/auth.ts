@@ -140,28 +140,6 @@ export function logoutUser(): void {
   setCurrentUser(null);
 }
 
-export function clearAllAppData(): void {
-  if (typeof window === "undefined") return;
-
-  localStorage.removeItem(USER_SESSION_KEY);
-  localStorage.removeItem(USERS_DB_KEY);
-  localStorage.removeItem("vega_gemini_api_key");
-
-  Object.keys(localStorage)
-    .filter((key) => key.startsWith("vega_cache_event_"))
-    .forEach((key) => localStorage.removeItem(key));
-
-  Object.keys(sessionStorage)
-    .filter((key) => key.startsWith("vega_"))
-    .forEach((key) => sessionStorage.removeItem(key));
-}
-
-export function requestAppReset(): void {
-  if (typeof window === "undefined") return;
-  sessionStorage.setItem("vega_reset_app", "1");
-  clearAllAppData();
-}
-
 export function addOrganizedEventToUser(code: string): void {
   const user = getCurrentUser();
   if (!user) return;

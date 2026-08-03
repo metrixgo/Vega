@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { addJoinedEventToUser, addOrganizedEventToUser, getCurrentUser, logoutUser, removeOrganizedEventFromUser, requestAppReset, User } from "@/lib/auth";
+import { addJoinedEventToUser, addOrganizedEventToUser, getCurrentUser, logoutUser, removeOrganizedEventFromUser, User } from "@/lib/auth";
 import type { EventData } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -24,7 +24,6 @@ export default function DashboardPage() {
   const [eventDesc, setEventDesc] = useState("");
   const [eventCategory, setEventCategory] = useState("Camp");
   const [maxCapacity, setMaxCapacity] = useState(20);
-  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     const current = getCurrentUser();
@@ -41,18 +40,11 @@ export default function DashboardPage() {
     router.push("/");
   };
 
-  const handleClearAllData = () => {
-    if (!confirm("This will clear your saved login, cached events, and local app data on this device. Continue?")) return;
-    requestAppReset();
-    setUser(null);
-    router.push("/");
-  };
-
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-    setCreateError(null);
 
+    // Generate a simple 4-digit numerical code (e.g., 8492)
     const code = Math.floor(1000 + Math.random() * 9000).toString();
 
     const newEvent: EventData = {
@@ -70,8 +62,13 @@ export default function DashboardPage() {
       updatedAt: Date.now(),
     };
 
+    // Cache locally immediately before server POST to ensure millisecond 0 availability
+    if (typeof window !== "undefined") {
+      localStorage.setItem(`vega_cache_event_${code}`, JSON.stringify(newEvent));
+    }
+
     try {
-      const res = await fetch("/api/event", {
+      await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -83,20 +80,8 @@ export default function DashboardPage() {
           maxParticipants: newEvent.maxParticipants,
         }),
       });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        setCreateError((errData as { error?: string }).error || "Failed to create event on server. Please try again.");
-        return;
-      }
-
-      const saved: EventData = await res.json();
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`vega_cache_event_${code}`, JSON.stringify(saved));
-      }
     } catch {
-      setCreateError("Network error. Could not save event to server.");
-      return;
+      /* ignore */
     }
 
     addOrganizedEventToUser(code);
@@ -188,9 +173,6 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={handleClearAllData} className="secondary text-sm">
-              Clear All Data
-            </button>
             <button onClick={handleLogout} className="secondary text-sm">
               Sign Out
             </button>
@@ -227,18 +209,6 @@ export default function DashboardPage() {
                 Join Event with 4-Digit Code
               </button>
             </div>
-          </div>
-        </section>
-
-        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Settings</h2>
-              <p className="mt-1 text-sm text-slate-500">Reset the app on this device to remove saved sign-ins and cached event data.</p>
-            </div>
-            <button onClick={handleClearAllData} className="danger px-4 py-2 text-sm font-semibold">
-              Clear All Local App Data
-            </button>
           </div>
         </section>
 
@@ -367,12 +337,6 @@ export default function DashboardPage() {
                 ✕
               </button>
             </div>
-
-            {createError && (
-              <div className="mb-4 rounded-xl bg-red-50 p-3.5 text-xs font-semibold text-red-700 ring-1 ring-red-200">
-                {createError}
-              </div>
-            )}
 
             <form onSubmit={handleCreateEvent} className="space-y-4">
               <div>

@@ -60,7 +60,6 @@ export default function ParticipantEventPage() {
   const prevEmergencyRef = useRef<string | null>(null);
   const prevCheckInIdRef = useRef<number | null>(null);
   const prevLastMessageIdRef = useRef<number>(0);
-  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   const myParticipantId = useMemo(() => {
     if (studentId) return String(studentId);
@@ -273,11 +272,6 @@ export default function ParticipantEventPage() {
           (phone && m.recipientId === phone))
     ).length;
   }, [messages, myParticipantId, name, phone]);
-
-  useEffect(() => {
-    if (!showChatModal || !chatScrollRef.current) return;
-    chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-  }, [showChatModal, participantMessages]);
 
   const handleLocate = () => {
     if (typeof window === "undefined" || !navigator.geolocation) {
@@ -565,7 +559,7 @@ export default function ParticipantEventPage() {
               </button>
             </div>
 
-            <div ref={chatScrollRef} className="flex-1 overflow-auto py-4 space-y-3">
+            <div className="flex-1 overflow-auto py-4 space-y-3">
               {participantMessages.length === 0 ? (
                 <div className="text-center py-10 text-xs text-slate-400">
                   No private messages yet. Send a message to your event organizer below.

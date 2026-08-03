@@ -84,12 +84,10 @@ export default function OrganizerEventPage() {
   const [showCheckInModal, setShowCheckInModal] = useState(false);
   const [checkInTitle, setCheckInTitle] = useState("Instant Safety Check-In");
   const [scheduledTime, setScheduledTime] = useState("");
-  const [banner, setBanner] = useState<{ type: "notice" | "emergency" | "checkin"; title: string; message: string } | null>(null);
 
   const [notifGranted, setNotifGranted] = useState(false);
   const prevHelpStudentsRef = useRef<Set<number>>(new Set());
   const prevLastMessageIdRef = useRef<number>(0);
-  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // Require Authentication Lock & Auto-Request Notifications
   useEffect(() => {
@@ -100,11 +98,6 @@ export default function OrganizerEventPage() {
     }
     requestNotificationPermission().then((granted) => setNotifGranted(granted));
   }, [router]);
-
-  const showBanner = (type: "notice" | "emergency" | "checkin", title: string, message: string) => {
-    setBanner({ type, title, message });
-    window.setTimeout(() => setBanner(null), 4000);
-  };
 
   const handleEnableNotifs = async () => {
     const granted = await requestNotificationPermission();
@@ -243,11 +236,6 @@ export default function OrganizerEventPage() {
     });
   }, [messages, selected]);
 
-  useEffect(() => {
-    if (!showChatModal || !chatScrollRef.current) return;
-    chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-  }, [showChatModal, selectedChatMessages]);
-
   const visible = useMemo(
     () => students.filter((student) => (filter === "All" || student.status === filter) && student.name.toLowerCase().includes(query.toLowerCase())),
     [students, query, filter]
@@ -274,14 +262,6 @@ export default function OrganizerEventPage() {
     setAlertText(item.text);
   };
 
-  const syncEventState = (data: EventData) => {
-    setEventData(data);
-    setStudents(data.students || []);
-    setNotices(data.notices || []);
-    setMessages(data.messages || []);
-    setCheckInReq(data.checkInRequest || null);
-  };
-
   const handleSendNotice = async () => {
     if (!noticeText.trim()) return;
     try {
@@ -292,9 +272,8 @@ export default function OrganizerEventPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        syncEventState(data);
+        setNotices(data.notices || []);
         triggerNotification("📢 Announcement Broadcasted", { body: noticeText.trim() }, "notice");
-        showBanner("notice", "Announcement Sent", noticeText.trim());
         setNoticeText("");
       }
     } catch {
@@ -345,9 +324,8 @@ export default function OrganizerEventPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        syncEventState(data);
+        setCheckInReq(data.checkInRequest);
         triggerNotification("⏱ Check-In Request Sent", { body: checkInTitle.trim() }, "notice");
-        showBanner("checkin", "Check-In Sent", checkInTitle.trim());
       }
     } catch {
       /* ignore */
@@ -373,17 +351,12 @@ export default function OrganizerEventPage() {
     const fullEmergencyPayload = `[${type.toUpperCase()}] ${alertText.trim()}`;
 
     try {
-      const res = await fetch("/api/event", {
+      await fetch("/api/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "emergency", code, text: fullEmergencyPayload }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        syncEventState(data);
-      }
       triggerNotification(`🚨 ${type.toUpperCase()} EMERGENCY DECLARED`, { body: alertText }, "emergency");
-      showBanner("emergency", `${type.toUpperCase()} Alert`, alertText);
     } catch {
       /* ignore */
     }
@@ -694,19 +667,6 @@ export default function OrganizerEventPage() {
         </section>
       </div>
 
-      {banner && (
-        <div className={`fixed top-4 left-1/2 z-[60] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 rounded-2xl border px-4 py-3 shadow-2xl ${banner.type === "emergency" ? "border-red-200 bg-red-600 text-white" : banner.type === "checkin" ? "border-amber-200 bg-amber-500 text-white" : "border-slate-200 bg-slate-900 text-white"}`}>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] opacity-80">{banner.type === "emergency" ? "Emergency Broadcast" : banner.type === "checkin" ? "Check-In Request" : "Organizer Notice"}</p>
-              <p className="mt-1 text-sm font-semibold">{banner.title}</p>
-              <p className="mt-1 text-sm opacity-90">{banner.message}</p>
-            </div>
-            <button onClick={() => setBanner(null)} className="text-sm font-semibold opacity-80 hover:opacity-100">✕</button>
-          </div>
-        </div>
-      )}
-
       {/* Private 1-on-1 Chat Modal */}
       {showChatModal && selected && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5 backdrop-blur-xs">
@@ -721,7 +681,7 @@ export default function OrganizerEventPage() {
               </button>
             </div>
 
-            <div ref={chatScrollRef} className="flex-1 overflow-auto py-4 space-y-3">
+            <div className="flex-1 overflow-auto py-4 space-y-3">
               {selectedChatMessages.length === 0 ? (
                 <div className="text-center py-10 text-xs text-slate-400">
                   No private messages yet. Type a message below to start chatting.
