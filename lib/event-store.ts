@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { kv } from "@vercel/kv";
 import type { EventData } from "@/lib/types";
 
 const REDIS_KEY = "vega_events";
@@ -21,26 +22,11 @@ function getFilePath(): string {
   }
 }
 
-function redisConfig() {
-  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
-  return url && token ? { url, token } : null;
-}
-
 async function loadFromRedis(): Promise<Record<string, EventData> | null> {
-  const cfg = redisConfig();
-  if (!cfg) return null;
   try {
-    const res = await fetch(cfg.url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${cfg.token}` },
-      body: JSON.stringify(["GET", REDIS_KEY]),
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data.result) return {};
-    return JSON.parse(data.result as string);
+    const data = await kv.get<Record<string, EventData>>(REDIS_KEY);
+    if (!data) return {};
+    return data;
   } catch (err) {
     console.error("Redis load error:", err);
     return null;
@@ -48,15 +34,9 @@ async function loadFromRedis(): Promise<Record<string, EventData> | null> {
 }
 
 async function saveToRedis(obj: Record<string, EventData>): Promise<boolean> {
-  const cfg = redisConfig();
-  if (!cfg) return false;
   try {
-    const res = await fetch(cfg.url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${cfg.token}` },
-      body: JSON.stringify(["SET", REDIS_KEY, JSON.stringify(obj)]),
-    });
-    return res.ok;
+    await kv.set(REDIS_KEY, obj);
+    return true;
   } catch (err) {
     console.error("Redis save error:", err);
     return false;
