@@ -2,6 +2,8 @@
 
 A mobile-friendly Next.js demo for group safety check-ins.
 
+Demo: https://vega-theta-virid.vercel.app/
+
 ## Run locally
 
 Use `npm.cmd install`, then `npm.cmd run dev` on Windows. Open the displayed local URL in a browser.
